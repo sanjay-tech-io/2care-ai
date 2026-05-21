@@ -2,25 +2,17 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Language, Patient, TraceStep } from "../types";
 import { 
   Mic, 
-  MicOff, 
   Phone, 
-  Volume2, 
   VolumeX,
   Send, 
-  Database, 
-  Languages, 
   Wifi, 
-  CircleDot, 
   Activity, 
-  Smartphone,
-  Play,
   Square,
-  MessageSquare,
   Loader2,
   Orbit,
-  User,
   UserPlus,
-  MessageCircle
+  MessageCircle,
+  AudioWaveform
 } from "lucide-react";
 
 interface Props {
@@ -42,21 +34,301 @@ interface Message {
   timestamp: string;
 }
 
-// Multilingual greeting templates
-const GREETINGS: Record<Language, { voice: string; text: string }> = {
-  [Language.ENGLISH]: {
-    voice: "Hi {name}, welcome to Aarogi AI. How may I assist you today?",
-    text: "Hi {name}, welcome to Aarogi AI. How may I assist you today?"
-  },
-  [Language.HINDI]: {
-    voice: "नमस्ते {name}, Aarogi AI में आपका स्वागत है। मैं आपकी कैसे सहायता कर सकता हूँ?",
-    text: "नमस्ते {name}, Aarogi AI में आपका स्वागत है। मैं आपकी कैसे सहायता कर सकता हूँ?"
-  },
-  [Language.TAMIL]: {
-    voice: "வணக்கம் {name}, Aarogi AI-க்கு வரவேற்கிறோம். நான் எப்படி உதவலாம்?",
-    text: "வணக்கம் {name}, Aarogi AI-க்கு வரவேற்கிறோம். நான் எப்படி உதவலாம்?"
-  }
+// ================================================
+// TAMIL SPEECH SANITIZER - STRICT VERSION
+// Converts ALL English/Latin words to Tamil 
+// phonetic equivalents BEFORE browser TTS.
+// DOES NOT modify UI chat text - only speech.
+// ================================================
+
+// Comprehensive English-to-Tamil word map
+const tamilWordMap: Record<string, string> = {
+  // Common words
+  "aarogi": "ஆரோகி",
+  "ai": "ஏ ஐ",
+  "hello": "வணக்கம்",
+  "welcome": "வரவேற்கிறோம்",
+  "thank": "நன்றி",
+  "thanks": "நன்றி",
+  "please": "தயவுசெய்து",
+  "sorry": "மன்னிக்கவும்",
+  // People names
+  "sanjay": "சஞ்சய்",
+  "priya": "பிரியா",
+  "rajesh": "ராஜேஷ்",
+  "vikram": "விக்ரம்",
+  "anita": "அனிதா",
+  "meena": "மீனா",
+  "anil": "அனில்",
+  "sharma": "சர்மா",
+  "patel": "படேல்",
+  "desai": "தேசாய்",
+  "naidu": "நாயுடு",
+  "reddy": "ரெட்டி",
+  "kumar": "குமார்",
+  "khanna": "கண்ணா",
+  "smith": "ஸ்மித்",
+  "alicia": "அலிசியா",
+  "joseph": "ஜோசப்",
+  // Medical titles
+  "dr.": "டாக்டர்",
+  "dr": "டாக்டர்",
+  "doctor": "டாக்டர்",
+  "mr.": "திரு",
+  "mrs.": "திருமதி",
+  "ms.": "திருமதி",
+  // Time markers
+  "am": "ஏ.எம்",
+  "pm": "பி.எம்",
+  "o'clock": "மணிக்கு",
+  "oclock": "மணிக்கு",
+  // Medical terms
+  "appointment": "சந்திப்பு",
+  "booking": "முன்பதிவு",
+  "book": "முன்பதிவு",
+  "cancel": "ரத்து",
+  "confirm": "உறுதி",
+  "confirmed": "உறுதி செய்யப்பட்டது",
+  "available": "கிடைக்கும்",
+  "slot": "நேரம்",
+  "slots": "நேரங்கள்",
+  "reschedule": "மாற்றம்",
+  "specialist": "நிபுணர்",
+  "specialty": "நிபுணத்துவம்",
+  "consultation": "ஆலோசனை",
+  "schedule": "திட்டமிடு",
+  "availability": "கிடைக்கும் தன்மை",
+  // Specialties
+  "dermatology": "தோல் மருத்துவம்",
+  "dermatologist": "தோல் மருத்துவர்",
+  "cardiology": "இதய நோய்",
+  "cardiologist": "இதய மருத்துவர்",
+  "neurology": "நரம்பு மருத்துவம்",
+  "neurologist": "நரம்பு மருத்துவர்",
+  "pediatrics": "குழந்தை நலம்",
+  "pediatrician": "குழந்தை மருத்துவர்",
+  "orthopedics": "எலும்பு மருத்துவம்",
+  "orthopedic": "எலும்பு மருத்துவம்",
+  "gynecology": "மகளிர் மருத்துவம்",
+  "ophthalmology": "கண் மருத்துவம்",
+  "general medicine": "பொது மருத்துவம்",
+  "dental": "பற் மருத்துவம்",
+  // Time of day
+  "morning": "காலை",
+  "afternoon": "மதியம்",
+  "evening": "மாலை",
+  "night": "இரவு",
+  // Days
+  "today": "இன்று",
+  "tomorrow": "நாளை",
+  "yesterday": "நேற்று",
+  "monday": "திங்கள்",
+  "tuesday": "செவ்வாய்",
+  "wednesday": "புதன்",
+  "thursday": "வியாழன்",
+  "friday": "வெள்ளி",
+  "saturday": "சனி",
+  "sunday": "ஞாயிறு",
+  // Responses
+  "yes": "ஆம்",
+  "no": "இல்லை",
+  "ok": "சரி",
+  "okay": "சரி",
+  "sure": "நிச்சயமாக",
+  "fine": "சரி",
+  "great": "நல்லது",
+  "good": "நல்லது",
 };
+
+// CRITICAL: Aggressive Tamil sanitizer that removes ALL English words
+function sanitizeForTamilSpeech(text: string): string {
+  if (!text) return text;
+  
+  // Step 1: Normalize - replace common punctuation that breaks word boundaries
+  let sanitized = text
+    .replace(/\./g, " . ")    // Periods get spaces
+    .replace(/,/g, " , ")     // Commas get spaces
+    .replace(/!/g, " ! ")
+    .replace(/\?/g, " ? ")
+    .replace(/:/g, " : ")
+    .replace(/;/g, " ; ")
+    .replace(/-/g, " - ")     // Hyphens get spaces (critical for "AI-க்கு" -> "AI க்கு")
+    .replace(/\s+/g, " ")     // Collapse spaces
+    .trim();
+  
+  // Step 2: Wrap with spaces for boundary matching
+  sanitized = " " + sanitized + " ";
+  
+  // Step 3: Replace known English words with Tamil equivalents
+  // Sort by length (longest first) to match compound words before single words
+  const sortedEntries = Object.entries(tamilWordMap).sort(([a], [b]) => b.length - a.length);
+  
+  for (const [eng, tamil] of sortedEntries) {
+    // Match word boundaries: preceded/followed by space, start/end of string, or punctuation
+    const escapedEng = eng.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    
+    // Match with word boundaries on both sides - this ensures " AI " matches but "AI" in "TAIL" doesn't
+    const regex = new RegExp(`(?<=^|[\\s.,!?;:()\\-])${escapedEng}(?=$|[\\s.,!?;:()\\-])`, 'gi');
+    sanitized = sanitized.replace(regex, (match: string) => {
+      // Preserve the case of original match for proper nouns, but use Tamil replacement
+      return tamil;
+    });
+  }
+  
+  // Step 4: Replace REMAINING Latin/English words with letter-by-letter Tamil
+  // This catches ANY word not in the dictionary
+  sanitized = sanitized.replace(/(?<=^|[^a-zA-Z])[a-zA-Z]+(?=$|[^a-zA-Z])/g, (match) => {
+    const lower = match.toLowerCase();
+    
+    // Check dictionary again (for words that might have been missed due to case/special chars)
+    if (tamilWordMap[lower]) return tamilWordMap[lower];
+    
+    // Letter-by-letter transliteration for anything remaining
+    const letterMap: Record<string, string> = {
+      a: "ஏ", b: "பீ", c: "சி", d: "டி", e: "ஈ", f: "எஃப்",
+      g: "ஜீ", h: "எச்", i: "ஐ", j: "ஜே", k: "கே", l: "எல்",
+      m: "எம்", n: "என்", o: "ஓ", p: "பீ", q: "க்யூ", r: "ஆர்",
+      s: "எஸ்", t: "டி", u: "யூ", v: "வீ", w: "டபிள்யூ",
+      x: "எக்ஸ்", y: "வை", z: "ஜெட்",
+    };
+    
+    return lower.split("").map((ch) => letterMap[ch] || ch).join(" ");
+  });
+  
+  // Step 5: Restore punctuation by removing extra spaces
+  sanitized = sanitized
+    .replace(/\s+\.\s+/g, ". ")   // period space
+    .replace(/\s+,\s+/g, ", ")    // comma space
+    .replace(/\s+!\s+/g, "! ")
+    .replace(/\s+\?\s+/g, "? ")
+    .replace(/\s+-\s+/g, "")      // re-join hyphens (AI க்கு -> AIக்கு for Tamil)
+    .replace(/\s{2,}/g, " ")      // collapse multiple spaces
+    .trim();
+  
+  return sanitized;
+}
+
+// ================================================
+// TAMIL VOICE FINDER
+// ================================================
+const findTamilVoice = (voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null => {
+  return voices.find(v => v.lang === "ta-IN")
+    || voices.find(v => v.lang.startsWith("ta-"))
+    || voices.find(v => v.name.toLowerCase().includes("tamil"))
+    || null; // Remove the Indian fallback — it causes Hindi voice to speak Tamil
+};
+
+// ================================================
+// SPEECH PLAYBACK GATE - single active speech
+// ================================================
+let activeAudioElement: HTMLAudioElement | null = null;
+let isSpeaking = false;
+
+function cancelAllSpeech() {
+  if (activeAudioElement) {
+    activeAudioElement.pause();
+    activeAudioElement = null;
+  }
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+  isSpeaking = false;
+}
+
+function playAudioBase64(base64Data: string, onStart?: () => void, onEnd?: () => void) {
+  cancelAllSpeech();
+  try {
+    const raw = window.atob(base64Data);
+    const array = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) array[i] = raw.charCodeAt(i);
+    const blob = new Blob([array], { type: "audio/wav" });
+    const blobUrl = URL.createObjectURL(blob);
+    const audio = new Audio(blobUrl);
+    activeAudioElement = audio;
+    isSpeaking = true;
+    onStart?.();
+    audio.play().catch(e => {
+      console.warn("[TTS] Audio playback aborted:", e);
+      isSpeaking = false;
+      onEnd?.();
+    });
+    audio.onended = () => {
+      isSpeaking = false;
+      onEnd?.();
+      activeAudioElement = null;
+    };
+    audio.onerror = () => {
+      isSpeaking = false;
+      onEnd?.();
+      activeAudioElement = null;
+    };
+  } catch (err) {
+    console.error("[TTS] Failed to play base64 audio:", err);
+    isSpeaking = false;
+    onEnd?.();
+  }
+}
+
+function speakUtterance(text: string, lang?: Language, onStart?: () => void, onEnd?: () => void) {
+  cancelAllSpeech();
+  if (!window.speechSynthesis) {
+    onEnd?.();
+    return;
+  }
+
+  let cleanText = text.replace(/[*#_`~\[\]]/g, "");
+  
+  // CRITICAL: For Tamil, sanitize ONLY the speech text, NOT the UI message
+  if (lang === Language.TAMIL) {
+    cleanText = sanitizeForTamilSpeech(cleanText);
+  }
+
+  const utterance = new SpeechSynthesisUtterance(cleanText);
+
+  // STRICT language mapping
+  if (lang === Language.HINDI) utterance.lang = "hi-IN";
+  else if (lang === Language.TAMIL) utterance.lang = "ta-IN";
+  else utterance.lang = "en-US";
+
+  const voices = window.speechSynthesis.getVoices();
+  
+  if (lang === Language.TAMIL) {
+    const tamilVoice = findTamilVoice(voices);
+    if (tamilVoice) {
+      utterance.voice = tamilVoice;
+      console.log("[TTS] Tamil voice:", tamilVoice.name, tamilVoice.lang);
+    } else {
+      console.log("[TTS] No Tamil voice found, using ta-IN lang fallback");
+    }
+  } else if (lang === Language.HINDI) {
+    const hindiVoice = voices.find(v => v.lang.startsWith("hi-") || v.name.toLowerCase().includes("hindi"));
+    if (hindiVoice) utterance.voice = hindiVoice;
+  } else {
+    const engVoice = voices.find(v => v.lang.startsWith("en-US") || v.lang.startsWith("en-GB"));
+    if (engVoice) utterance.voice = engVoice;
+  }
+
+  utterance.rate = 0.95;
+  utterance.pitch = 1.0;
+  
+  isSpeaking = true;
+  onStart?.();
+  
+  utterance.onstart = () => {
+    isSpeaking = true;
+    onStart?.();
+  };
+  utterance.onend = () => {
+    isSpeaking = false;
+    onEnd?.();
+  };
+  utterance.onerror = () => {
+    isSpeaking = false;
+    onEnd?.();
+  };
+
+  window.speechSynthesis.speak(utterance);
+}
 
 export default function VoiceConsole({ 
   patients, 
@@ -68,7 +340,6 @@ export default function VoiceConsole({
   onOnboard,
   sessionId
 }: Props) {
-  // Patient onboarding state
   const [patientName, setPatientName] = useState<string>("");
   const [patientPhone, setPatientPhone] = useState<string>("");
   
@@ -77,18 +348,23 @@ export default function VoiceConsole({
   const [inputText, setInputText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isModelThinking, setIsModelThinking] = useState(false);
-  const [isTtsEnabled, setIsTtsEnabled] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(!isOnboarded);
 
   const socketRef = useRef<WebSocket | null>(null);
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const initializedRef = useRef(false);
+  const renderedMessageIds = useRef(new Set<string>());
 
-  // Scroll messages to bottom on new message
+  // Live speaking state
+  const [speakingState, setSpeakingState] = useState<"idle" | "speaking" | "processing">("idle");
+
+  // Smooth auto-scroll to bottom on new messages
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [messages, speakingState]);
 
   // Generate unique message ID
   const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -98,18 +374,19 @@ export default function VoiceConsole({
     if (socketRef.current) {
       socketRef.current.close();
     }
+    // Clear dedup set on new connection
+    renderedMessageIds.current.clear();
 
     setWsStatus("connecting");
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = window.location.host;
     const wsUrl = `${protocol}//${host}/api/voice`;
 
-    console.log("Connecting to voice broker:", wsUrl);
+    console.log("[WS] Connecting to voice broker:", wsUrl);
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
       setWsStatus("connected");
-      // Send handshake call start with session info
       ws.send(JSON.stringify({
         type: "call_start",
         phone: patientPhone || "guest",
@@ -127,61 +404,87 @@ export default function VoiceConsole({
           addMessage("system", data.text);
         } else if (data.type === "processing_audio") {
           setIsModelThinking(true);
+          setSpeakingState("processing");
         } else if (data.type === "voice_response") {
+          console.log("[DEBUG] audio received:", !!data.audio, "lang:", data.language);
           setIsModelThinking(false);
-          addMessage("bot", data.text, data.language || activeLanguage);
-          
+          const responseLang = [Language.ENGLISH, Language.HINDI, Language.TAMIL].includes(data.language)
+            ? (data.language as Language)
+            : activeLanguage;
+
+          // Deduplicate by text+lang fingerprint
+          const msgKey = `bot:${responseLang}:${data.text}`;
+          if (renderedMessageIds.current.has(msgKey)) {
+            console.log("[DEDUP] Skipping duplicate:", data.text.substring(0, 40));
+            return;
+          }
+          renderedMessageIds.current.add(msgKey);
+
+          addMessage("bot", data.text, responseLang);
+          if (responseLang !== activeLanguage) {
+            setActiveLanguage(responseLang);
+          }
+
           if (data.trace && data.latencies) {
             onNewResult(data.trace, data.latencies);
             onRefreshData();
           }
-          
-          // Play Gemini Voice Output or fallback to browser TTS
-          if (isTtsEnabled) {
-            if (data.audio) {
-              playAudioBase64(data.audio);
-            } else {
-              speakUtterance(data.text, data.language || activeLanguage);
+
+          console.log("[DEBUG] Processing voice response:", !!data.audio, "lang:", data.language);
+          // SINGLE SPEECH PLAYBACK PATH - pick ONE
+          if (data.audio) {
+            playAudioBase64(data.audio, 
+              () => setSpeakingState("speaking"),
+              () => setSpeakingState("idle")
+            );
+          } else {
+            const voices = window.speechSynthesis.getVoices();
+            const hasTamilVoice = voices.some(v => v.lang.startsWith("ta-"));
+            
+            if (responseLang === Language.TAMIL && !hasTamilVoice) {
+              console.warn("[TTS] No Tamil voice in browser. Install Tamil TTS or rely on Gemini audio.");
+              setSpeakingState("idle");
+              return; // Don't attempt — it will silently fail
             }
-          }
-        } else if (data.type === "greeting") {
-          setIsModelThinking(false);
-          addMessage("bot", data.text, data.language || activeLanguage);
-          if (isTtsEnabled) {
-            speakUtterance(data.text, data.language || activeLanguage);
+            speakUtterance(data.text, responseLang,
+              () => setSpeakingState("speaking"),
+              () => setSpeakingState("idle")
+            );
           }
         } else if (data.type === "error") {
           setIsModelThinking(false);
+          setSpeakingState("idle");
           addMessage("system", `Error: ${data.message}`);
         }
       } catch (err) {
-        console.error("WS parse error:", err);
+        console.error("[WS] Parse error:", err);
       }
     };
 
     ws.onclose = () => {
       setWsStatus("disconnected");
       setIsRecording(false);
+      cancelAllSpeech();
+      setSpeakingState("idle");
     };
 
     ws.onerror = (e) => {
-      console.error("WS error occurred:", e);
+      console.error("[WS] Error:", e);
       setWsStatus("disconnected");
     };
 
     socketRef.current = ws;
-  }, [patientPhone, patientName, activeLanguage, sessionId, isTtsEnabled, onNewResult, onRefreshData]);
+  }, [patientPhone, patientName, activeLanguage, sessionId, onNewResult, onRefreshData]);
 
-  // Disconnect WS
   const disconnectWebSocket = () => {
     if (socketRef.current) {
       socketRef.current.close();
       socketRef.current = null;
     }
     setWsStatus("disconnected");
+    cancelAllSpeech();
   };
 
-  // Initialize WebSocket connection
   useEffect(() => {
     if (isOnboarded && !initializedRef.current) {
       connectWebSocket();
@@ -190,10 +493,10 @@ export default function VoiceConsole({
     return () => {
       disconnectWebSocket();
       initializedRef.current = false;
+      cancelAllSpeech();
     };
   }, [isOnboarded]);
 
-  // Reconnect when language changes
   useEffect(() => {
     if (isOnboarded && initializedRef.current && socketRef.current) {
       disconnectWebSocket();
@@ -201,52 +504,23 @@ export default function VoiceConsole({
     }
   }, [activeLanguage]);
 
-  // Send greeting when onboarded
-  useEffect(() => {
-    if (isOnboarded && patientName && messages.length === 0 && wsStatus === "connected") {
-      const greeting = GREETINGS[activeLanguage];
-      const personalizedGreeting = greeting.text.replace("{name}", patientName);
-      
-      // Send greeting to server for Redis storage
-      if (socketRef.current) {
-        socketRef.current.send(JSON.stringify({
-          type: "greeting",
-          name: patientName,
-          phone: patientPhone,
-          language: activeLanguage,
-          sessionId: sessionId
-        }));
-      }
-      
-      // Show greeting locally
-      addMessage("bot", personalizedGreeting, activeLanguage);
-      if (isTtsEnabled) {
-        const voiceGreeting = greeting.voice.replace("{name}", patientName);
-        speakUtterance(voiceGreeting, activeLanguage);
-      }
-    }
-  }, [isOnboarded, patientName, messages.length, wsStatus, activeLanguage, patientPhone, sessionId]);
-
   const addMessage = (sender: "user" | "bot" | "system", text: string, lang?: Language) => {
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     setMessages(prev => [...prev, { id: generateId(), sender, text, lang, timestamp: timeStr }]);
   };
 
-  // Handle onboarding submission
   const handleOnboarding = () => {
     if (patientName.trim() && patientPhone.trim()) {
       onOnboard(patientName.trim(), patientPhone.trim(), activeLanguage);
       setShowOnboarding(false);
-      // Trigger WebSocket connection after onboarding
       setTimeout(() => connectWebSocket(), 100);
     }
   };
 
-  // Web Speech API STT handler
   const startSpeechRecognition = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      addMessage("system", "Speech recognition is not supported in this browser. Please type your query.");
+      addMessage("system", "Speech recognition not supported. Please type.");
       return;
     }
 
@@ -254,39 +528,23 @@ export default function VoiceConsole({
       const rec = new SpeechRecognition();
       rec.continuous = false;
       rec.interimResults = false;
+      rec.lang = activeLanguage === Language.TAMIL ? "ta-IN" : activeLanguage === Language.HINDI ? "hi-IN" : "en-US";
 
-      // Select proper language localization code
-      let langCode = "en-US";
-      if (activeLanguage === Language.HINDI) langCode = "hi-IN";
-      if (activeLanguage === Language.TAMIL) langCode = "ta-IN";
-      rec.lang = langCode;
-
-      rec.onstart = () => {
-        setIsRecording(true);
-        addMessage("system", `Listening in ${activeLanguage}. Speak now...`);
-      };
-
+      rec.onstart = () => setIsRecording(true);
       rec.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
-        if (transcript) {
-          sendTranscriptionToServer(transcript);
-        }
+        if (transcript) sendTranscriptionToServer(transcript);
       };
-
       rec.onerror = (err: any) => {
-        console.error("STT recognition error:", err);
-        setIsRecording(false);
-        addMessage("system", `Voice input error: ${err.error}. Typing fallback is active.`);
-      };
-
-      rec.onend = () => {
+        console.error("[STT] Error:", err);
         setIsRecording(false);
       };
+      rec.onend = () => setIsRecording(false);
 
       recognitionRef.current = rec;
       rec.start();
     } catch (exp: any) {
-      console.error("STT initiation failed:", exp);
+      console.error("[STT] Init failed:", exp);
       setIsRecording(false);
     }
   };
@@ -300,11 +558,12 @@ export default function VoiceConsole({
 
   const sendTranscriptionToServer = (text: string) => {
     if (!text.trim()) return;
-
-    // Add user question to layout
     addMessage("user", text, activeLanguage);
-
     if (socketRef.current && wsStatus === "connected") {
+      // Cancel any ongoing speech before sending new user message
+      cancelAllSpeech();
+      setSpeakingState("idle");
+      
       socketRef.current.send(JSON.stringify({
         type: "user_transcription",
         text: text,
@@ -314,11 +573,10 @@ export default function VoiceConsole({
         sessionId: sessionId
       }));
     } else {
-      addMessage("system", "Error: No active connection. Please wait...");
+      addMessage("system", "No active connection. Please wait...");
     }
   };
 
-  // Send message via typed input
   const handleSendMessage = () => {
     if (!inputText.trim()) return;
     const msg = inputText;
@@ -326,131 +584,15 @@ export default function VoiceConsole({
     sendTranscriptionToServer(msg);
   };
 
-  // Play premium base64 vocalization stream
-  const playAudioBase64 = (base64Data: string) => {
-    try {
-      if (window.speechSynthesis) {
-        window.speechSynthesis.cancel();
-      }
-      const raw = window.atob(base64Data);
-      const rawLength = raw.length;
-      const array = new Uint8Array(new ArrayBuffer(rawLength));
-      for (let i = 0; i < rawLength; i++) {
-        array[i] = raw.charCodeAt(i);
-      }
-      const blob = new Blob([array], { type: "audio/wav" });
-      const blobUrl = URL.createObjectURL(blob);
-      const audio = new Audio(blobUrl);
-      audio.play().catch(e => {
-        console.warn("Audio playback aborted:", e);
-      });
-    } catch (err) {
-      console.error("Failed to play audio:", err);
+  // Speaking indicator text
+  const getSpeakingLabel = () => {
+    switch (speakingState) {
+      case "processing": return "Thinking...";
+      case "speaking": return "Speaking...";
+      default: return "";
     }
   };
 
-  // Tamil speech sanitizer - convert English fragments to Tamil phonetics for better TTS
-  const sanitizeForTamilSpeech = (text: string): string => {
-    // Replace common English words with Tamil phonetics for better speech synthesis
-    const replacements: Record<string, string> = {
-      "Aarogi": "ஆரோகி",
-      "AI": "ஏ ஐ",
-      "Dr.": "டாக்டர்",
-      "Dr": "டாக்டர்",
-      "AM": "ஏ.எம்",
-      "PM": "பி.எம்",
-      " Dermatology ": " தோல் மருத்துவம் ",
-      "Cardiology": " இதய நோய் ",
-      "Neurology": " நரம்பு மருத்துவம் ",
-      "Pediatrics": " குழந்தை நலம் ",
-      "appointment": " சந்திப்பு ",
-      "booking": " முன்பதிவு ",
-      "cancel": " ரத்து ",
-      "confirm": " உறுதி ",
-      "available": " கிடைக்கும் ",
-      "slot": " நேரம் ",
-      "morning": " காலை ",
-      "afternoon": " மதியம் ",
-      "evening": " மாலை ",
-      "today": "இன்று",
-      "tomorrow": "நாளை",
-    };
-    
-    let sanitized = text;
-    for (const [eng, tamil] of Object.entries(replacements)) {
-      sanitized = sanitized.replace(new RegExp(eng, 'gi'), tamil);
-    }
-    
-    console.log("[TTS] Tamil sanitized:", sanitized);
-    return sanitized;
-  };
-
-  // Browser Synthesis (TTS) Reader with proper multilingual support
-  const speakUtterance = (text: string, lang?: Language) => {
-    if (!window.speechSynthesis) return;
-
-    window.speechSynthesis.cancel();
-
-    let cleanText = text.replace(/[*#_`~\[\]]/g, "");
-    
-    // Sanitize Tamil text for better speech synthesis
-    if (lang === Language.TAMIL) {
-      cleanText = sanitizeForTamilSpeech(cleanText);
-    }
-
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-
-    // Strict language mapping
-    let targetLang = "en-US";
-    if (lang === Language.HINDI) targetLang = "hi-IN";
-    if (lang === Language.TAMIL) targetLang = "ta-IN";
-    utterance.lang = targetLang;
-
-    // Load voices
-    const voices = window.speechSynthesis.getVoices();
-    
-    // Try to find matching voice
-    let voiceCandidate = voices.find(v => 
-      v.lang.startsWith(targetLang.split("-")[0]) || 
-      v.lang.toLowerCase().includes(targetLang.split("-")[0].toLowerCase())
-    );
-    
-    // Fallback for regional voices
-    if (!voiceCandidate) {
-      if (lang === Language.HINDI) {
-        voiceCandidate = voices.find(v => 
-          v.name.toLowerCase().includes("india") || 
-          v.name.toLowerCase().includes("hindi") ||
-          v.lang.includes("IN")
-        );
-      } else if (lang === Language.TAMIL) {
-        // Strict Tamil voice search - prioritize Tamil-specific voices
-        voiceCandidate = voices.find(v =>
-          v.name.toLowerCase().includes("tamil") ||
-          (v.lang.startsWith("ta") && v.lang.includes("IN")) ||
-          v.name.toLowerCase().includes("india")
-        );
-        // Fallback: any Tamil-compatible voice
-        if (!voiceCandidate) {
-          voiceCandidate = voices.find(v =>
-            v.lang.startsWith("ta") || v.lang.includes("TA")
-          );
-        }
-        console.log("[TTS] Tamil voice selected:", voiceCandidate?.name || "None - using fallback");
-      }
-    }
-
-    if (voiceCandidate) {
-      utterance.voice = voiceCandidate;
-    }
-
-    utterance.rate = 0.95;
-    utterance.pitch = 1.0;
-
-    window.speechSynthesis.speak(utterance);
-  };
-
-  // Language display helpers
   const getLanguageDisplay = (lang: Language) => {
     switch(lang) {
       case Language.HINDI: return "हिंदी";
@@ -504,7 +646,6 @@ export default function VoiceConsole({
 
           {/* Right Controls */}
           <div className="flex items-center gap-3">
-            {/* Language Selector - Visual Update */}
             <div className="flex items-center gap-1 bg-slate-900/50 border border-white/[0.06] rounded-lg p-1">
               {([Language.ENGLISH, Language.HINDI, Language.TAMIL] as Language[]).map((lang) => (
                 <button
@@ -523,7 +664,7 @@ export default function VoiceConsole({
           </div>
         </div>
 
-        {/* Status Bar */}
+        {/* Status Bar with Live Speaking Indicator */}
         <div className="flex items-center gap-4 mt-3 text-[10px] text-slate-500 font-mono">
           <span className="flex items-center gap-1.5">
             <span className="w-1 h-1 rounded-full bg-cyan-500"></span>
@@ -533,10 +674,16 @@ export default function VoiceConsole({
             <span className="w-1 h-1 rounded-full bg-purple-500"></span>
             Gemini 2.5 Flash
           </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-1 h-1 rounded-full bg-teal-500"></span>
-            Redis Session
-          </span>
+          
+          {/* Live Speaking Indicator */}
+          {speakingState !== "idle" && (
+            <span className={`flex items-center gap-1.5 ml-2 ${
+              speakingState === "speaking" ? "text-emerald-400" : "text-amber-400"
+            }`}>
+              <AudioWaveform className={`w-3 h-3 ${speakingState === "speaking" ? "animate-pulse" : "animate-spin"}`} />
+              <span className="text-[10px] font-semibold">{getSpeakingLabel()}</span>
+            </span>
+          )}
         </div>
       </div>
 
@@ -614,6 +761,12 @@ export default function VoiceConsole({
                     <Activity className="w-3 h-3 text-cyan-500" />
                     <span className="text-[10px] text-cyan-400 font-medium">{getLanguageDisplay(m.lang)}</span>
                     <span className="text-[9px] text-slate-600 ml-auto">{m.timestamp}</span>
+                    {/* Speaking indicator on active message */}
+                    {speakingState === "speaking" && (
+                      <span className="flex items-center gap-1 text-emerald-400 ml-2">
+                        <AudioWaveform className="w-2.5 h-2.5 animate-pulse" />
+                      </span>
+                    )}
                   </div>
                 )}
                 <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
@@ -629,10 +782,18 @@ export default function VoiceConsole({
           ))
         )}
         
-        {isModelThinking && (
-          <div className="flex items-center gap-2 text-xs text-cyan-400">
+        {/* Processing / Thinking indicator */}
+        {(isModelThinking || speakingState === "processing") && (
+          <div className="flex items-center gap-2 text-xs text-cyan-400 animate-pulse">
             <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Processing...</span>
+            <span>
+              {speakingState === "speaking" ? "Speaking..." : "Thinking..."}
+            </span>
+            <span className="flex gap-1 ml-1">
+              <span className="w-1 h-1 bg-cyan-500 rounded-full animate-bounce" style={{animationDelay: "0ms"}}></span>
+              <span className="w-1 h-1 bg-cyan-500 rounded-full animate-bounce" style={{animationDelay: "150ms"}}></span>
+              <span className="w-1 h-1 bg-cyan-500 rounded-full animate-bounce" style={{animationDelay: "300ms"}}></span>
+            </span>
           </div>
         )}
         <div ref={messagesEndRef} />
@@ -642,23 +803,13 @@ export default function VoiceConsole({
       <div className="p-4 bg-[#101827]/80 border-t border-white/[0.06]">
         <div className="flex items-center gap-3">
           
-          {/* TTS Toggle */}
+          {/* Stop Speech Button */}
           <button
-            onClick={() => {
-              setIsTtsEnabled(!isTtsEnabled);
-            }}
-            className={`p-2.5 rounded-xl border transition-all flex items-center justify-center ${
-              isTtsEnabled 
-                ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/30 hover:bg-cyan-500/30" 
-                : "bg-slate-900 text-slate-500 border-white/[0.06] hover:bg-slate-800"
-            }`}
-            title={isTtsEnabled ? "Disable voice output" : "Enable voice output"}
+            onClick={() => { cancelAllSpeech(); }}
+            className="p-2.5 rounded-xl border bg-slate-900 text-slate-500 border-white/[0.06] hover:bg-slate-800 transition-all flex items-center justify-center"
+            title="Stop current speech"
           >
-            {isTtsEnabled ? (
-              <Volume2 className="w-5 h-5" />
-            ) : (
-              <VolumeX className="w-5 h-5" />
-            )}
+            <VolumeX className="w-5 h-5" />
           </button>
 
           {/* Recording Button */}

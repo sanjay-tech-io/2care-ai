@@ -52,16 +52,22 @@ export class LanguageService {
       "baje",
       "samay",
       "dhanyawad",
-      "book",
-      "karna",
-      "milna",
+      "shukriya",
+      "samasya",
+      "kaise",
+      "theek",
+      "khana",
+      "dawa",
+      "madad",
+      "kijiye",
+      "bataiye",
       "hai",
       "hindi",
       "clinic",
       "hospital",
-      "madad",
-      "kijiye",
-      "bataiye"
+      "book",
+      "karna",
+      "milna"
     ];
 
     // -----------------------------
@@ -85,22 +91,36 @@ export class LanguageService {
       "tamil",
       "udavi",
       "pesunga",
-      "maruthuvam"
+      "maruthuvam",
+      "veedu",
+      "sari",
+      "enna",
+      "pudhu",
+      "ungal",
+      "neenga",
+      "thirumba",
+      "nanri",
+      "suthi",
+      "urimai",
+      "kaasu"
     ];
 
     let tamilCount = 0;
     let hindiCount = 0;
 
-    tamilTriggers.forEach((word) => {
-      if (textSample.includes(word)) {
-        tamilCount++;
-      }
-    });
+    const tokens = textSample.split(/[^a-z0-9]+/i).filter(Boolean);
 
-    hindiTriggers.forEach((word) => {
-      if (textSample.includes(word)) {
-        hindiCount++;
-      }
+    tokens.forEach((token) => {
+      tamilTriggers.forEach((word) => {
+        if (token.includes(word)) {
+          tamilCount++;
+        }
+      });
+      hindiTriggers.forEach((word) => {
+        if (token.includes(word)) {
+          hindiCount++;
+        }
+      });
     });
 
     // -----------------------------

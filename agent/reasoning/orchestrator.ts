@@ -12,6 +12,7 @@ import {
   TraceStep,
   SessionData,
   Doctor,
+  ConversationStep,
 } from "../../src/types";
 
 const SYSTEM_TODAY = "2026-05-21";
@@ -21,7 +22,7 @@ const SYSTEM_TODAY = "2026-05-21";
 // ================================================
 
 interface ExtractedIntent {
-  intent: "booking" | "cancellation" | "reschedule" | "doctor_inquiry" | "symptom_discussion" | "general" | "none";
+  intent: "booking" | "cancellation" | "reschedule" | "doctor_inquiry" | "symptom_discussion" | "general" | "confirm_slot" | "none";
   entities: {
     specialty?: string;
     doctorId?: string;
@@ -72,6 +73,27 @@ const SYMPTOM_SPECIALTY_MAP: Record<string, string> = {
   "बुखार": "General Medicine",
   "सिरदर्द": "Neurology",
   "बच्चा": "Pediatrics",
+  // Specialist names
+  "dermatologist": "Dermatology",
+  "dermatology": "Dermatology",
+  "cardiologist": "Cardiology",
+  "cardiology": "Cardiology",
+  "pediatrician": "Pediatrics",
+  "pediatrics": "Pediatrics",
+  "neurologist": "Neurology",
+  "neurology": "Neurology",
+  "orthopedic": "Orthopedics",
+  "orthopedics": "Orthopedics",
+  // Tamil doctor types
+  "தோல்": "Dermatology",
+  "தோல் மருத்துவர்": "Dermatology",
+  "தோல் மருத்துவம்": "Dermatology",
+  "இதய": "Cardiology",
+  "இதய மருத்துவர்": "Cardiology",
+  "இதய நோய்": "Cardiology",
+  "நரம்பியல்": "Neurology",
+  "நரம்பியல் மருத்துவர்": "Neurology",
+  "குழந்தை மருத்துவர்": "Pediatrics",
 };
 
 function mapSymptomToSpecialty(symptomText: string): string | undefined {
@@ -85,17 +107,17 @@ function mapSymptomToSpecialty(symptomText: string): string | undefined {
 }
 
 // Date parsing helpers
-function parseDate(dateText: string, referenceDate: Date = new Date()): string | undefined {
-  const today = new Date(referenceDate);
+function parseDate(dateText: string): string | undefined {
+  const today = new Date(SYSTEM_TODAY);
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
   
   const lower = dateText.toLowerCase();
   
-  if (lower.includes("today")) {
+  if (lower.includes("today") || lower.includes("இன்று") || lower.includes("आज")) {
     return today.toISOString().split("T")[0];
   }
-  if (lower.includes("tomorrow")) {
+  if (lower.includes("tomorrow") || lower.includes("நாளை") || lower.includes("कल")) {
     return tomorrow.toISOString().split("T")[0];
   }
   
@@ -105,7 +127,7 @@ function parseDate(dateText: string, referenceDate: Date = new Date()): string |
     return `${dateMatch[1]}-${dateMatch[2].padStart(2, "0")}-${dateMatch[3].padStart(2, "0")}`;
   }
   
-  const monthMatch = dateText.match(/([A-Za-z]+)\s+(\d{1,2})/);
+  const monthMatch = dateText.match(/([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?/);
   if (monthMatch) {
     const months: Record<string, string> = {
       "january": "01", "february": "02", "march": "03", "april": "04",
@@ -122,31 +144,142 @@ function parseDate(dateText: string, referenceDate: Date = new Date()): string |
   return undefined;
 }
 
-// Time parsing helpers
+// ================================================
+// ROBUST TIME PARSING
+// ================================================
 function parseTime(timeText: string): string | undefined {
-  const lower = timeText.toLowerCase();
+  const lower = timeText.toLowerCase().trim();
   
-  // Standard times
-  const times = ["09:00 AM", "09:30 AM", "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM", 
+  const standardTimes = ["09:00 AM", "09:30 AM", "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM", 
                  "12:00 PM", "12:30 PM", "01:00 PM", "01:30 PM", "02:00 PM", "02:30 PM",
                  "03:00 PM", "03:30 PM", "04:00 PM", "04:30 PM", "05:00 PM"];
-  
-  for (const time of times) {
-    const timeNum = time.replace(" AM", "").replace(" PM", "");
-    if (lower.includes(timeNum) || lower.includes(time.toLowerCase())) {
-      return time;
+
+  for (const std of standardTimes) {
+    if (lower.includes(std.toLowerCase())) {
+      return std;
     }
   }
+
+  // Pattern: "10:30 AM" or "10:30am" or "10:30 am"
+  const colonMatch = lower.match(/(\d{1,2})\s*[:.]\s*(\d{2})\s*(am|pm)?/i);
+  if (colonMatch) {
+    let hour = parseInt(colonMatch[1], 10);
+    const minute = colonMatch[2];
+    const ampm = (colonMatch[3] || "").toLowerCase();
+    
+    let suffix: string;
+    if (ampm) {
+      suffix = ampm === "am" ? "AM" : "PM";
+    } else {
+      suffix = hour < 12 ? "AM" : "PM";
+    }
+    
+    if (suffix === "PM" && hour < 12) hour += 12;
+    if (suffix === "AM" && hour === 12) hour = 0;
+    
+    const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+    const displayStr = `${displayHour.toString().padStart(2, "0")}:${minute} ${suffix}`;
+    
+    for (const std of standardTimes) {
+      if (std.toLowerCase() === displayStr.toLowerCase()) return std;
+    }
+    return displayStr;
+  }
+
+  // Pattern: "10 AM" or "10am"
+  const hourOnlyMatch = lower.match(/(\d{1,2})\s*(am|pm)/i);
+  if (hourOnlyMatch) {
+    let hour = parseInt(hourOnlyMatch[1], 10);
+    const suffix = hourOnlyMatch[2].toUpperCase() === "AM" ? "AM" : "PM";
+    
+    if (suffix === "PM" && hour < 12) hour += 12;
+    if (suffix === "AM" && hour === 12) hour = 0;
+    
+    const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+    return `${displayHour.toString().padStart(2, "0")}:00 ${suffix}`;
+  }
+
+  // Pattern: bare number like "10" or "10:30"
+  const bareNumberMatch = lower.match(/(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:o['\u2018\u2019]?\s*clock)?\b/);
+  if (bareNumberMatch) {
+    let hour = parseInt(bareNumberMatch[1], 10);
+    const minute = bareNumberMatch[2] || "00";
+    const suffix = hour < 12 || hour >= 18 ? "AM" : "PM";
+    const displayHour = hour > 12 ? hour - 12 : hour;
+    return `${displayHour.toString().padStart(2, "0")}:${minute} ${suffix}`;
+  }
+
+  // Human readable
+  if (lower.includes("morning") || lower.includes("காலை") || lower.includes("सुबह")) return "10:00 AM";
+  if (lower.includes("afternoon") || lower.includes("मதியம்") || lower.includes("दोपहर")) return "02:00 PM";
+  if (lower.includes("evening") || lower.includes("मாலை") || lower.includes("शाम")) return "04:00 PM";
   
-  // Human readable parsing
-  if (lower.includes("morning")) return "10:00 AM";
-  if (lower.includes("afternoon")) return "02:00 PM";
-  if (lower.includes("evening")) return "04:00 PM";
-  
+  if (lower.includes("first") || lower.includes("earliest") || lower.includes("any") || lower.includes("available")) {
+    return "FIRST_AVAILABLE";
+  }
+
   return undefined;
 }
 
-// Main intent extraction function
+// Check if text contains time-related language
+function containsTimeReference(text: string): boolean {
+  const lower = text.toLowerCase();
+  const timeKeywords = [
+    "am", "pm", "o'clock", "oclock", "clock",
+    ":00", ":15", ":30", ":45",
+    "morning", "afternoon", "evening",
+    "slot", "time", "timing",
+    "first", "earliest", "any time",
+    "10", "11", "12", "01", "02", "03", "04", "05",
+    "காலை", "मதியம்", "मालை", "नேரம்",
+    "सुबह", "दोपहर", "शाम", "समय",
+    "first", "any", "prefer", "choose", "select",
+    "today", "tomorrow", "next"
+  ];
+  return timeKeywords.some(kw => lower.includes(kw));
+}
+
+// ================================================
+// MATCH DOCTOR NAME FROM USER TEXT
+// ================================================
+function matchDoctorByName(userText: string, doctors: Doctor[]): Doctor | null {
+  const lower = userText.toLowerCase();
+  for (const doc of doctors) {
+    // Match by doctor name parts
+    const nameParts = doc.name.toLowerCase().replace("dr.", "").replace("dr", "").trim().split(" ");
+    for (const part of nameParts) {
+      if (part.length > 2 && lower.includes(part)) {
+        return doc;
+      }
+    }
+    // Match by index number e.g. "first", "1", "doctor 1"
+    const indexMatch = lower.match(/(?:doctor|dr|#|no|number)?\s*(\d+)/);
+    if (indexMatch) {
+      const idx = parseInt(indexMatch[1], 10) - 1;
+      if (idx >= 0 && idx < doctors.length && doctors[idx].name.toLowerCase() === doc.name.toLowerCase()) {
+        return doc;
+      }
+    }
+  }
+  return null;
+}
+
+// ================================================
+// MATCH SPECIALTY FROM USER TEXT (for DOCTOR_SELECTION)
+// ================================================
+function matchSpecialtyFromText(text: string): string | undefined {
+  const lower = text.toLowerCase();
+  for (const [keyword, specialty] of Object.entries(SYMPTOM_SPECIALTY_MAP)) {
+    if (lower.includes(keyword)) {
+      return specialty;
+    }
+  }
+  return undefined;
+}
+
+// ================================================
+// MAIN INTENT EXTRACTION
+// ================================================
 function extractIntent(userMessage: string, session: SessionData): ExtractedIntent {
   const lower = userMessage.toLowerCase();
   const result: ExtractedIntent = {
@@ -154,23 +287,53 @@ function extractIntent(userMessage: string, session: SessionData): ExtractedInte
     entities: {}
   };
   
-  // Check if in booking flow
-  if (session.pendingConfirmation && session.bookingState?.doctorId) {
-    // User is likely selecting a slot
+  // ================================================
+  // STEP-BASED ROUTING
+  // ================================================
+  
+  if (session.currentStep === ConversationStep.SLOT_SELECTION || 
+      (session.pendingConfirmation && session.bookingState?.doctorId)) {
     const extractedTime = parseTime(userMessage);
     const extractedDate = parseDate(userMessage);
     
-    if (extractedTime) {
+    if (extractedTime === "FIRST_AVAILABLE" && session.bookingState?.availableSlots && session.bookingState.availableSlots.length > 0) {
       result.intent = "booking";
-      result.entities.time = extractedTime;
-      if (extractedDate) result.entities.date = extractedDate;
-      else result.entities.date = session.bookingState.date || SYSTEM_TODAY;
+      result.entities.time = session.bookingState.availableSlots[0];
+      result.entities.date = session.bookingState.date || SYSTEM_TODAY;
       result.entities.doctorId = session.bookingState.doctorId;
       result.entities.doctorName = session.bookingState.doctorName;
       result.entities.specialty = session.bookingState.specialty;
       return result;
     }
     
+    if (extractedTime) {
+      result.intent = "booking";
+      result.entities.time = extractedTime;
+      result.entities.date = extractedDate || session.bookingState.date || SYSTEM_TODAY;
+      result.entities.doctorId = session.bookingState.doctorId;
+      result.entities.doctorName = session.bookingState.doctorName;
+      result.entities.specialty = session.bookingState.specialty;
+      return result;
+    }
+    
+    // Confirmation keywords with single slot auto-book
+    const confirmWords = ["yes", "yeah", "ok", "okay", "sure", "fine", "confirm", "book", 
+                          "hmm", "correct", "right", "proceed", "go ahead",
+                          "ஆம்", "சரி", "சரிதான்",
+                          "हाँ", "ठीक है", "हां"];
+    const isConfirm = confirmWords.some(w => lower.includes(w));
+    if (isConfirm && session.bookingState?.availableSlots && session.bookingState.availableSlots.length === 1) {
+      result.intent = "booking";
+      result.entities.time = session.bookingState.availableSlots[0];
+      result.entities.date = session.bookingState.date || SYSTEM_TODAY;
+      result.entities.doctorId = session.bookingState.doctorId;
+      result.entities.doctorName = session.bookingState.doctorName;
+      result.entities.specialty = session.bookingState.specialty;
+      return result;
+    }
+    
+    // No time extracted, user might be saying no/changing mind
+    // Still return booking intent to keep in slot selection
     if (extractedDate) {
       result.intent = "booking";
       result.entities.date = extractedDate;
@@ -181,9 +344,26 @@ function extractIntent(userMessage: string, session: SessionData): ExtractedInte
     }
   }
   
+  // DOCTOR_SELECTION: User choosing from a list of doctors
+  if (session.currentStep === ConversationStep.DOCTOR_SELECTION) {
+    // User might be typing a doctor's name or selecting by number
+    // We'll return doctor_inquiry with a hint and let the handler figure it out
+    const specialty = session.bookingState?.specialty;
+    if (specialty) {
+      result.intent = "doctor_inquiry";
+      result.entities.specialty = specialty;
+      // Check if user is specifying a doctor name directly
+      const doctors = redisStore.getDoctors().then(docs => docs.filter(d => 
+        d.specialty.toLowerCase().includes(specialty.toLowerCase())
+      )).catch(() => []);
+      // We return general and let the handler deal with doctor matching
+      return result;
+    }
+  }
+
   // Cancellation keywords
   if (lower.includes("cancel") || lower.includes("रद्द") || lower.includes("ரத்து") || 
-      lower.includes("विठुल") || lower.includes("delete") || lower.includes("remove")) {
+      lower.includes("delete") || lower.includes("remove")) {
     result.intent = "cancellation";
     return result;
   }
@@ -195,13 +375,16 @@ function extractIntent(userMessage: string, session: SessionData): ExtractedInte
     return result;
   }
   
-  // Doctor availability inquiry
+  // Doctor availability inquiry / booking request
   if (lower.includes("available") || lower.includes("slot") || lower.includes("timing") || 
-      lower.includes("appointment") || lower.includes("book") || lower.includes("schedule") ||
-      lower.includes("घर") || lower.includes("நேரம்") || lower.includes("समय")) {
+      lower.includes("appointment") || lower.includes("book") || lower.includes("booking") || 
+      lower.includes("schedule") || lower.includes("பதிவு") || lower.includes("மருத்துவர்") || 
+      lower.includes("நேரம்") || lower.includes("वேண்டும்") || lower.includes("பார்க்க") ||
+      lower.includes("घर") || lower.includes("समय") ||
+      lower.includes("need") || lower.includes("want") || lower.includes("see")) {
     result.intent = "doctor_inquiry";
     
-    // Extract specialty from symptoms
+    // Extract specialty from symptoms or direct specialist names
     const specialty = mapSymptomToSpecialty(userMessage);
     if (specialty) {
       result.entities.specialty = specialty;
@@ -223,7 +406,6 @@ function extractIntent(userMessage: string, session: SessionData): ExtractedInte
     result.entities.symptoms = userMessage;
     result.entities.specialty = specialty;
     
-    // Check for date
     const extractedDate = parseDate(userMessage);
     if (extractedDate) {
       result.entities.date = extractedDate;
@@ -232,18 +414,41 @@ function extractIntent(userMessage: string, session: SessionData): ExtractedInte
     return result;
   }
   
+  // If session has active booking state and user mentions time, treat as booking
+  if (session.bookingState?.doctorId && containsTimeReference(userMessage)) {
+    const extractedTime = parseTime(userMessage);
+    if (extractedTime) {
+      result.intent = "booking";
+      result.entities.time = extractedTime;
+      result.entities.date = session.bookingState.date || SYSTEM_TODAY;
+      result.entities.doctorId = session.bookingState.doctorId;
+      result.entities.doctorName = session.bookingState.doctorName;
+      result.entities.specialty = session.bookingState.specialty;
+      return result;
+    }
+  }
+
   // Default to general conversation
   result.intent = "general";
   return result;
 }
 
-// Find matching doctor by specialty
-async function findDoctorBySpecialty(specialty: string): Promise<Doctor | null> {
+// Find ALL matching doctors by specialty (returns array)
+async function findDoctorsBySpecialty(specialty: string): Promise<Doctor[]> {
   const doctors = await redisStore.getDoctors();
-  const match = doctors.find(d => 
+  return doctors.filter(d => 
     d.specialty.toLowerCase().includes(specialty.toLowerCase())
   );
-  return match || null;
+}
+
+// Find single doctor by name across all doctors
+async function findDoctorByName(nameQuery: string): Promise<Doctor | null> {
+  const doctors = await redisStore.getDoctors();
+  const lower = nameQuery.toLowerCase();
+  return doctors.find(d => 
+    d.name.toLowerCase().includes(lower) ||
+    lower.includes(d.name.toLowerCase().replace("dr.", "").replace("dr", "").trim())
+  ) || null;
 }
 
 const genAI = new GoogleGenerativeAI(
@@ -261,6 +466,12 @@ export class ClinicalAgentOrchestrator {
         "GEMINI_API_KEY environment variable is required."
       );
     }
+  }
+
+  // Ensure doctors are seeded into Redis (Bug 1)
+  private async ensureDoctorsSeeded(): Promise<void> {
+    // No-op: doctors are already seeded in redis_service.ts initialDoctors
+    // Do NOT re-seed here to avoid duplicate entries with different IDs
   }
 
   public async handleRequest(params: {
@@ -298,52 +509,42 @@ export class ClinicalAgentOrchestrator {
     } = params;
 
     // Simulated STT latency
-    const sttLatency =
-      80 + Math.floor(Math.random() * 60);
+    const sttLatency = 80 + Math.floor(Math.random() * 60);
+
+    // ------------------------------------------------
+    // ENSURE DOCTORS ARE SEEDED (Bug 1)
+    // ------------------------------------------------
+    await this.ensureDoctorsSeeded();
 
     // ------------------------------------------------
     // PATIENT LOOKUP
     // ------------------------------------------------
 
-    let patientObj =
-      await redisStore.findPatientByPhone(phone);
+    let patientObj = await redisStore.findPatientByPhone(phone);
 
     if (!patientObj && overrideName) {
-      patientObj =
-        await patientCache.syncPatientProfile(phone, {
-          name: overrideName,
-          preferredLanguage:
-            presetLanguage || Language.ENGLISH,
-        });
+      patientObj = await patientCache.syncPatientProfile(phone, {
+        name: overrideName,
+        preferredLanguage: presetLanguage || Language.ENGLISH,
+      });
     }
 
-    const currentPrefLanguage =
-      patientObj?.preferredLanguage ||
-      presetLanguage ||
-      Language.ENGLISH;
+    const currentPrefLanguage = patientObj?.preferredLanguage || presetLanguage || Language.ENGLISH;
 
     // ------------------------------------------------
-    // SESSION - Load session for context
+    // SESSION - Load session
     // ------------------------------------------------
 
-    const session =
-      await sessionService.getSession(
-        phone,
-        currentPrefLanguage
-      );
+    const session = await sessionService.getSession(phone, currentPrefLanguage);
 
     // ------------------------------------------------
-    // DYNAMIC LANGUAGE DETECTION - Detect per message
+    // LANGUAGE DETECTION
     // ------------------------------------------------
     
-    // CRITICAL: Detect language for EVERY user message
-    // This enables true multilingual switching behavior
-    // If user speaks Tamil, respond in Tamil. If Hindi, respond in Hindi.
-    const detectedLang =
-      languageService.detectLanguage(
-        userInput,
-        session.preferredLanguage || currentPrefLanguage
-      );
+    const detectedLang = presetLanguage || languageService.detectLanguage(
+      userInput,
+      session.preferredLanguage || currentPrefLanguage
+    );
 
     // ------------------------------------------------
     // INTENT EXTRACTION & TOOL EXECUTION
@@ -353,101 +554,286 @@ export class ClinicalAgentOrchestrator {
     let toolResults = "";
     let finalResponseText = "";
     let detectedIntent = "general";
+    let nextStep: ConversationStep = session.currentStep;
 
     const intent = extractIntent(userInput, session);
     detectedIntent = intent.intent;
 
-    // Handle different intents by executing tools
+    // ================================================
+    // HANDLE DOCTOR/SLOT BOOKING FLOW
+    // ================================================
+    
     if (intent.intent === "doctor_inquiry" || intent.intent === "symptom_discussion") {
-      selectedTool = "find_doctor";
       
-      let targetDoctor: Doctor | null = null;
-      
-      // Find doctor by specialty if provided
-      if (intent.entities.specialty) {
-        targetDoctor = await findDoctorBySpecialty(intent.entities.specialty);
-      }
-      
-      // Get available slots if doctor found
-      if (targetDoctor) {
-        const targetDate = intent.entities.date || SYSTEM_TODAY;
-        const slotsResult = await schedulerService.getAvailableSlots(targetDoctor.id, targetDate);
+      // If in DOCTOR_SELECTION step, try to match what user said to a doctor
+      if (session.currentStep === ConversationStep.DOCTOR_SELECTION) {
+        const matchingDocs = await findDoctorsBySpecialty(session.bookingState?.specialty || "");
         
-        // Format response based on language
-        if (detectedLang === Language.TAMIL) {
-          finalResponseText = `${targetDoctor.name} அவர்களுக்கு ${targetDate} அன்று ${slotsResult.slots.length > 0 ? `${slotsResult.slots.join(", ")}என்று நேரங்கள் கிடைக்கின்றன. நீங்கள் ஒரு நேரத்தை தேர்வு செய்யலாமா?` : "நேரம் இல்லை"}`;
-        } else if (detectedLang === Language.HINDI) {
-          finalResponseText = `${targetDoctor.name} के पास ${targetDate} को ${slotsResult.slots.length > 0 ? `${slotsResult.slots.join(", ")} बजे स्लॉट उपलब्ध हैं। कृपया एक समय चुनें?` : "कोई स्लॉट उपलब्ध नहीं है"}`;
+        if (matchingDocs.length > 0) {
+          // Try to match the user's input to a specific doctor
+          const matchedDoc = matchDoctorByName(userInput, matchingDocs);
+          
+          if (matchedDoc) {
+            // Doctor selected! Fetch their slots.
+            selectedTool = "check_availability";
+            const targetDate = intent.entities.date || SYSTEM_TODAY;
+            const availabilityTool = await this.executeClinicalTool(
+              "check_availability",
+              { doctorId: matchedDoc.id, date: targetDate },
+              phone
+            );
+
+            const slotsResult = availabilityTool.rawPayload as {
+              success: boolean;
+              doctorName?: string;
+              specialty?: string;
+              slots: string[];
+              message: string;
+            };
+
+            if (slotsResult.success && slotsResult.slots.length > 0) {
+              if (detectedLang === Language.TAMIL) {
+                finalResponseText = ` ${matchedDoc.name} அவர்களுக்கு ${targetDate} அன்று ${slotsResult.slots.join(", ")} என்று நேரங்கள் கிடைக்கின்றன. எந்த நேரத்தை விரும்புகிறீர்கள்?`;
+              } else if (detectedLang === Language.HINDI) {
+                finalResponseText = ` ${matchedDoc.name} के पास ${targetDate} को ${slotsResult.slots.join(", ")} बजे स्लॉट उपलब्ध हैं। कृपया एक समय चुनें।`;
+              } else {
+                finalResponseText = ` ${matchedDoc.name} has availability on ${targetDate}: ${slotsResult.slots.join(", ")}. Which time would you like?`;
+              }
+            } else {
+              if (detectedLang === Language.TAMIL) {
+                finalResponseText = `${matchedDoc.name} அவர்களுக்கு ${targetDate} அன்று நேரங்கள் இல்லை. வித்தியாசமான தேதியை முயற்சிக்கவும்.`;
+              } else if (detectedLang === Language.HINDI) {
+                finalResponseText = `${matchedDoc.name} के पास ${targetDate} को कोई स्लॉट उपलब्ध नहीं है। कोई दूसरी तारीख चुनें।`;
+              } else {
+                finalResponseText = `${matchedDoc.name} has no available slots on ${targetDate}. Please try a different date.`;
+              }
+            }
+
+            nextStep = ConversationStep.SLOT_SELECTION;
+            
+            const updatedSession: SessionData = {
+              ...session,
+              currentStep: ConversationStep.SLOT_SELECTION,
+              activeIntent: "book",
+              pendingConfirmation: true,
+              bookingState: {
+                doctorId: matchedDoc.id,
+                doctorName: matchedDoc.name,
+                specialty: matchedDoc.specialty,
+                date: targetDate,
+                availableSlots: slotsResult.slots || []
+              }
+            };
+            await sessionService.saveSession(phone, updatedSession);
+            toolResults = JSON.stringify(slotsResult);
+          } else {
+            // User didn't specify a doctor name - show them again
+            if (detectedLang === Language.TAMIL) {
+              finalResponseText = `தயவுசெய்து ஒரு மருத்துவரை தேர்வு செய்யவும்: ${matchingDocs.map((d, i) => `${i + 1}. ${d.name}`).join(", ")}`;
+            } else if (detectedLang === Language.HINDI) {
+              finalResponseText = `कृपया एक डॉक्टर चुनें: ${matchingDocs.map((d, i) => `${i + 1}. ${d.name}`).join(", ")}`;
+            } else {
+              finalResponseText = `Please choose a doctor: ${matchingDocs.map((d, i) => `${i + 1}. ${d.name}`).join(", ")}`;
+            }
+            nextStep = ConversationStep.DOCTOR_SELECTION;
+          }
         } else {
-          finalResponseText = slotsResult.success && slotsResult.slots.length > 0
-            ? `Dr. ${targetDoctor.name} has availability on ${targetDate}: ${slotsResult.slots.join(", ")}. Which time would you prefer?`
-            : `Dr. ${targetDoctor.name} has no available slots on ${targetDate}. Would you like a different date?`;
+          // No doctors found for this specialty
+          if (detectedLang === Language.TAMIL) {
+            finalResponseText = `மன்னிக்கவும், அந்த வகை மருத்துவர் எங்களிடம் இல்லை. வேறு மருத்துவரை தேர்வு செய்யவும்.`;
+          } else if (detectedLang === Language.HINDI) {
+            finalResponseText = `क्षमा करें, हमारे पास उस प्रकार का डॉक्टर नहीं है। कोई अन्य विकल्प चुनें।`;
+          } else {
+            finalResponseText = `Sorry, we don't have that specialist. Please choose from the available options.`;
+          }
+        }
+        toolResults = "doctor selection processed";
+      } else {
+        // Not in DOCTOR_SELECTION - handle specialist detection
+        let matchingDocs: Doctor[] = [];
+        
+        if (intent.entities.specialty) {
+          matchingDocs = await findDoctorsBySpecialty(intent.entities.specialty);
         }
         
-        // Save booking state
+        if (matchingDocs.length > 0) {
+          if (matchingDocs.length === 1) {
+            // Single doctor matches - fetch slots directly
+            selectedTool = "check_availability";
+            const targetDate = intent.entities.date || SYSTEM_TODAY;
+            const availabilityTool = await this.executeClinicalTool(
+              "check_availability",
+              { doctorId: matchingDocs[0].id, date: targetDate },
+              phone
+            );
+
+            const slotsResult = availabilityTool.rawPayload as {
+              success: boolean;
+              doctorName?: string;
+              specialty?: string;
+              slots: string[];
+              message: string;
+            };
+
+            if (slotsResult.success && slotsResult.slots.length > 0) {
+              if (detectedLang === Language.TAMIL) {
+                finalResponseText = ` ${matchingDocs[0].name} அவர்களுக்கு ${targetDate} அன்று ${slotsResult.slots.join(", ")} என்று நேரங்கள் கிடைக்கின்றன. எந்த நேரத்தை விரும்புகிறீர்கள்?`;
+              } else if (detectedLang === Language.HINDI) {
+                finalResponseText = `${matchingDocs[0].name} के पास ${targetDate} को ${slotsResult.slots.join(", ")} बजे स्लॉट उपलब्ध हैं। कृपया एक समय चुनें।`;
+              } else {
+                finalResponseText = `${matchingDocs[0].name} has availability on ${targetDate}: ${slotsResult.slots.join(", ")}. Which time would you like?`;
+              }
+            } else {
+              if (detectedLang === Language.TAMIL) {
+                finalResponseText = ` ${matchingDocs[0].name} அவர்களுக்கு ${targetDate} அன்று நேரங்கள் இல்லை. வித்தியாசமான தேதியை முயற்சிக்கவும்.`;
+              } else if (detectedLang === Language.HINDI) {
+                finalResponseText = `${matchingDocs[0].name} के पास ${targetDate} को कोई स्लॉट उपलब्ध नहीं है। कोई दूसरी तारीख चुनें।`;
+              } else {
+                finalResponseText = ` ${matchingDocs[0].name} has no available slots on ${targetDate}. Would you like to try a different date?`;
+              }
+            }
+
+            nextStep = ConversationStep.SLOT_SELECTION;
+            
+            const updatedSession: SessionData = {
+              ...session,
+              currentStep: ConversationStep.SLOT_SELECTION,
+              activeIntent: "book",
+              pendingConfirmation: true,
+              bookingState: {
+                doctorId: matchingDocs[0].id,
+                doctorName: matchingDocs[0].name,
+                specialty: matchingDocs[0].specialty,
+                date: targetDate,
+                availableSlots: slotsResult.slots || []
+              }
+            };
+            await sessionService.saveSession(phone, updatedSession);
+            toolResults = JSON.stringify(slotsResult);
+          } else {
+            // Multiple doctors match - show list for user to choose
+            nextStep = ConversationStep.DOCTOR_SELECTION;
+            
+            if (detectedLang === Language.TAMIL) {
+              finalResponseText = `இந்த ${matchingDocs[0].specialty} மருத்துவர்கள் உள்ளனர்: ${matchingDocs.map((d, i) => `${i + 1}. ${d.name}`).join(", ")}. யாரை பார்க்க விரும்புகிறீர்கள்?`;
+            } else if (detectedLang === Language.HINDI) {
+              finalResponseText = `${matchingDocs[0].specialty} के ये डॉक्टर उपलब्ध हैं: ${matchingDocs.map((d, i) => `${i + 1}. ${d.name}`).join(", ")}. किस डॉक्टर से मिलना चाहेंगे?`;
+            } else {
+              finalResponseText = `We have these ${matchingDocs[0].specialty} specialists: ${matchingDocs.map((d, i) => `${i + 1}. ${d.name}`).join(", ")}. Which doctor would you like to see?`;
+            }
+            
+            const updatedSession: SessionData = {
+              ...session,
+              currentStep: ConversationStep.DOCTOR_SELECTION,
+              activeIntent: "book",
+              pendingConfirmation: false,
+              bookingState: {
+                ...session.bookingState,
+                specialty: matchingDocs[0].specialty
+              }
+            };
+            await sessionService.saveSession(phone, updatedSession);
+            toolResults = JSON.stringify(matchingDocs);
+          }
+        } else {
+          // No matching doctors or specialty - list all available
+          const allDoctors = await redisStore.getDoctors();
+          
+          if (detectedLang === Language.TAMIL) {
+            finalResponseText = `எங்களிடம் உள்ள மருத்துவர்கள்: ${allDoctors.map(d => `${d.name} (${d.specialty})`).join(", ")}. எந்த மருத்துவரை நீங்கள் பார்க்க விரும்புகிறீர்கள்?`;
+          } else if (detectedLang === Language.HINDI) {
+            finalResponseText = `हमारे डॉक्टर: ${allDoctors.map(d => `${d.name} (${d.specialty})`).join(", ")}. आप किस डॉक्टर से मिलना चाहेंगे?`;
+          } else {
+            finalResponseText = `We have the following doctors available: ${allDoctors.map(d => `${d.name} (${d.specialty})`).join(", ")}. Which specialist do you need?`;
+          }
+          
+          const updatedSession: SessionData = {
+            ...session,
+            currentStep: ConversationStep.SPECIALIST_SELECTION,
+            activeIntent: "book",
+          };
+          await sessionService.saveSession(phone, updatedSession);
+          toolResults = JSON.stringify(allDoctors);
+        }
+      }
+    } 
+    // ================================================
+    // BOOKING - Execute the actual booking
+    // ================================================
+    else if (intent.intent === "booking" && intent.entities.doctorId && intent.entities.time) {
+      selectedTool = "book_appointment";
+      const bookTool = await this.executeClinicalTool(
+        "book_appointment",
+        {
+          patientPhone: phone,
+          patientName: patientObj?.name || overrideName || "Patient",
+          doctorId: intent.entities.doctorId,
+          date: intent.entities.date || SYSTEM_TODAY,
+          time: intent.entities.time
+        },
+        phone
+      );
+      const bookResult = bookTool.rawPayload as {
+        success: boolean;
+        message: string;
+        suggestedSlots?: string[];
+      };
+
+      finalResponseText = bookResult.message;
+      
+      if (bookResult.success) {
+        nextStep = ConversationStep.COMPLETED;
+        await sessionService.clearSession(phone);
+      } else if (bookResult.suggestedSlots && bookResult.suggestedSlots.length > 0) {
+        // Slot conflict - show alternatives
+        nextStep = ConversationStep.SLOT_SELECTION;
         const updatedSession: SessionData = {
           ...session,
-          activeIntent: "book",
+          currentStep: ConversationStep.SLOT_SELECTION,
           pendingConfirmation: true,
           bookingState: {
-            doctorId: targetDoctor.id,
-            doctorName: targetDoctor.name,
-            specialty: targetDoctor.specialty,
-            date: targetDate
+            ...session.bookingState,
+            availableSlots: bookResult.suggestedSlots
           }
         };
         await sessionService.saveSession(phone, updatedSession);
         
-        toolResults = JSON.stringify(slotsResult);
-      } else {
-        // No specific doctor requested - list available doctors
-        const doctors = await redisStore.getDoctors();
-        
         if (detectedLang === Language.TAMIL) {
-          finalResponseText = `எந்த மருத்துவர் வகையை நீங்கள் தேடுகிறீர்கள்? ${doctors.map(d => `${d.name} - ${d.specialty}`).join(", ")}`;
+          finalResponseText = `அந்த நேரம் ஏற்கனவே முன்பதிவு செய்யப்பட்டுள்ளது. கிடைக்கும் நேரங்கள்: ${bookResult.suggestedSlots.join(", ")}. வேறு நேரத்தை தேர்வு செய்யவும்.`;
         } else if (detectedLang === Language.HINDI) {
-          finalResponseText = `आप किस प्रकार के डॉक्टर की तलाश कर रहे हैं? ${doctors.map(d => `${d.name} - ${d.specialty}`).join(", ")}`;
+          finalResponseText = `वह समय पहले ही बुक हो चुका है। उपलब्ध स्लॉट: ${bookResult.suggestedSlots.join(", ")}. कृपया कोई अन्य समय चुनें।`;
         } else {
-          finalResponseText = `We have the following specialists available: ${doctors.map(d => `${d.name} (${d.specialty})`).join(", ")}. Which specialist do you need?`;
+          finalResponseText = `That slot is already booked. Available slots: ${bookResult.suggestedSlots.join(", ")}. Please choose another time.`;
         }
-        
-        toolResults = JSON.stringify(doctors);
-      }
-    } 
-    else if (intent.intent === "booking" && intent.entities.doctorId && intent.entities.time) {
-      selectedTool = "book_appointment";
-      
-      const bookResult = await schedulerService.bookAppointment({
-        patientPhone: phone,
-        patientName: patientObj?.name || overrideName || "Patient",
-        doctorId: intent.entities.doctorId,
-        date: intent.entities.date || SYSTEM_TODAY,
-        time: intent.entities.time
-      });
-      
-      finalResponseText = bookResult.message;
-      
-      if (bookResult.success) {
-        // Clear session
-        await sessionService.clearSession(phone);
-      } else if (bookResult.suggestedSlots) {
-        // Suggest alternatives
-        finalResponseText += ` Available alternatives: ${bookResult.suggestedSlots.join(", ")}`;
       }
       
       toolResults = JSON.stringify(bookResult);
-    }
-    else if (intent.intent === "cancellation") {
+      
+      // Notify operations dashboard via callback
+      if (params.onToolExecute) {
+        params.onToolExecute("book_appointment", 
+          { 
+            patientPhone: phone, 
+            patientName: patientObj?.name || overrideName || "Patient",
+            doctorId: intent.entities.doctorId, 
+            doctorName: intent.entities.doctorName,
+            date: intent.entities.date, 
+            time: intent.entities.time 
+          }, 
+          bookResult.message
+        );
+      }
+    } else if (intent.intent === "cancellation") {
       selectedTool = "cancel_appointment";
       
-      // Find patient's appointment
       const patientAppts = await redisStore.findAppointmentsByPhone(phone);
       if (patientAppts.length > 0) {
         const latestAppt = patientAppts[0];
         const cancelResult = await schedulerService.cancelAppointment(latestAppt.id);
         finalResponseText = cancelResult.message;
         
-        // Broadcast cancellation to operations dashboard
+        nextStep = ConversationStep.COMPLETED;
+        
         if (params.onToolExecute) {
           params.onToolExecute("cancel_appointment", { appointmentId: latestAppt.id }, cancelResult.message);
         }
@@ -466,9 +852,10 @@ export class ClinicalAgentOrchestrator {
       
       const patientAppts = await redisStore.findAppointmentsByPhone(phone);
       if (patientAppts.length > 0) {
-        // Save reschedule state
+        nextStep = ConversationStep.DATE_SELECTION;
         const updatedSession: SessionData = {
           ...session,
+          currentStep: ConversationStep.DATE_SELECTION,
           activeIntent: "reschedule",
           pendingConfirmation: true,
           rescheduleAppointmentId: patientAppts[0].id
@@ -476,7 +863,7 @@ export class ClinicalAgentOrchestrator {
         await sessionService.saveSession(phone, updatedSession);
         
         finalResponseText = detectedLang === Language.TAMIL
-          ? `உங்க் ந்திப்பு ${patientAppts[0].date} அன்று ${patientAppts[0].time}இல் பதிவு செய்யப்பட்டுள்ளது. புதிய திகதி மற்றும் நேரத்தை கூறுங்கள்.`
+          ? `உங்கள் சந்திப்பு ${patientAppts[0].date} அன்று ${patientAppts[0].time}இல் உள்ளது. புதிய தேதி மற்றும் நேரத்தை கூறுங்கள்.`
           : detectedLang === Language.HINDI
           ? `आपकी अपॉइंटमेंट ${patientAppts[0].date} को ${patientAppts[0].time} बजे है। नई तारीख और समय बताएं।`
           : `Your current appointment is on ${patientAppts[0].date} at ${patientAppts[0].time}. What new date and time would you prefer?`;
@@ -506,7 +893,6 @@ export class ClinicalAgentOrchestrator {
       const systemPrompt = getSystemInstructions(SYSTEM_TODAY, phone, session);
       
       try {
-        // STRICT LANGUAGE CONTROL
         const languageInstruction =
           detectedLang === Language.TAMIL
             ? "Reply ONLY in Tamil language. Never use English or Hindi."
@@ -535,6 +921,8 @@ ${phone}
 Detected Language:
 ${detectedLang}
 
+Current Conversation Step: ${session.currentStep}
+
 User Message:
 ${userInput}
 
@@ -550,13 +938,10 @@ Respond professionally like a real hospital AI assistant.
         const result = await model.generateContent(prompt);
 
         finalResponseText = result.response.text()?.trim() || "Hello, how may I assist you today?";
-
-        // SAFETY CLEANUP
         finalResponseText = finalResponseText.replace(/\*\*/g, "");
       } catch (exp: any) {
         console.error("Gemini orchestration failure:", exp);
 
-        // Multilingual fallback
         if (detectedLang === Language.TAMIL) {
           finalResponseText = "மன்னிக்கவும். தற்போது சேவை தற்காலிகமாக கிடைக்கவில்லை.";
         } else if (detectedLang === Language.HINDI) {
@@ -570,102 +955,85 @@ Respond professionally like a real hospital AI assistant.
     llmLatency = Date.now() - llmStart;
 
     // ------------------------------------------------
+    // GREETING FOLLOW-UP (Issue 1)
+    // ------------------------------------------------
+
+    if (session.currentStep === ConversationStep.GREETING) {
+      const followUp =
+        detectedLang === Language.TAMIL
+          ? " இன்று நான் உங்களுக்கு எப்படி உதவ முடியும்? உங்கள் அறிகுறிகள் அல்லது எந்த நிபுணர் தேவை என்று சொல்லுங்கள்."
+          : detectedLang === Language.HINDI
+          ? " आज मैं आपकी कैसे मदद कर सकता हूँ? कृपया अपने लक्षण या किस विशेषज्ञ की जरूरत है बताएं।"
+          : " How can I help you today? Please tell me your symptoms or which specialist you need.";
+      finalResponseText += followUp;
+      const updatedSession: SessionData = {
+        ...session,
+        currentStep: ConversationStep.SPECIALIST_SELECTION,
+      };
+      await sessionService.saveSession(phone, updatedSession);
+    }
+
+    // ------------------------------------------------
     // TTS
     // ------------------------------------------------
 
     const voiceStart = Date.now();
+    const ttsLang = finalResponseText.match(/[\u0B80-\u0BFF]/) 
+    ? Language.TAMIL 
+    : finalResponseText.match(/[\u0900-\u097F]/) 
+    ? Language.HINDI 
+    : Language.ENGLISH;
 
-    const voiceResult =
-      await ttsService.generateSpeech(
-        finalResponseText,
-        detectedLang
-      );
-
-    const ttsLatency =
-      Date.now() - voiceStart;
+    const voiceResult = await ttsService.generateSpeech(finalResponseText, ttsLang);
+    const ttsLatency = Date.now() - voiceStart; 
 
     // ------------------------------------------------
     // LATENCY
     // ------------------------------------------------
 
-    const totalLatency =
-      Date.now() - globalStart;
+    const totalLatency = Date.now() - globalStart;
 
     const latencyLogs = {
       stt: sttLatency,
       llm: llmLatency,
       tts: ttsLatency,
       total: totalLatency,
-      textLength:
-        finalResponseText.length,
+      textLength: finalResponseText.length,
     };
 
-    await redisStore.addLatencyLog(
-      latencyLogs
-    );
+    await redisStore.addLatencyLog(latencyLogs);
 
     // ------------------------------------------------
     // TRACE
     // ------------------------------------------------
 
     const trace = {
-      detectedIntent:
-        session.activeIntent ||
-        "conversation",
-
-      retrievedMemory: JSON.stringify(
-        {
-          phone,
-          patientName:
-            patientObj?.name || "Guest",
-          detectedLanguage:
-            detectedLang,
-        },
-        null,
-        2
-      ),
-
+      detectedIntent: session.activeIntent || "conversation",
+      retrievedMemory: JSON.stringify({
+        phone,
+        patientName: patientObj?.name || "Guest",
+        detectedLanguage: detectedLang,
+      }, null, 2),
       selectedTool,
-
-      toolResults:
-        toolResults ||
-        "No tool executed",
-
-      finalResponse:
-        finalResponseText,
-
-      languageDetected:
-        detectedLang,
+      toolResults: toolResults || "No tool executed",
+      finalResponse: finalResponseText,
+      languageDetected: detectedLang,
     };
 
-    await redisStore.addTraceStep(
-      trace
-    );
+    await redisStore.addTraceStep(trace);
 
     // ------------------------------------------------
     // RESPONSE
     // ------------------------------------------------
 
     return {
-      textResponse:
-        finalResponseText,
-
-      speakAudio:
-        voiceResult.hasAudio
-          ? {
-              hasAudio: true,
-              audioData:
-                voiceResult.audioData,
-            }
-          : undefined,
-
-      detectedLanguage:
-        detectedLang,
-
+      textResponse: finalResponseText,
+      speakAudio: voiceResult.hasAudio
+        ? { hasAudio: true, audioData: voiceResult.audioData }
+        : undefined,
+      detectedLanguage: detectedLang,
       trace,
-
-      latencies:
-        latencyLogs,
+      latencies: latencyLogs,
     };
   }
 
@@ -676,147 +1044,55 @@ Respond professionally like a real hospital AI assistant.
   private async executeClinicalTool(
     name: string,
     args: any,
-    session: SessionData,
-    phone: string,
-    lang: Language
+    phone: string
   ): Promise<{
     outputStr: string;
     rawPayload: any;
   }> {
     try {
-      // LIST DOCTORS
       if (name === "list_doctors") {
-        const docs =
-          await redisStore.getDoctors();
-
+        const docs = await redisStore.getDoctors();
         return {
-          outputStr:
-            docs
-              .map(
-                (d: Doctor) =>
-                  `${d.name} (${d.specialty})`
-              )
-              .join(", "),
-
+          outputStr: docs.map((d: Doctor) => `${d.name} (${d.specialty})`).join(", "),
           rawPayload: docs,
         };
       }
 
-      // CHECK AVAILABILITY
-      if (
-        name ===
-        "check_availability"
-      ) {
-        const result =
-          await schedulerService.getAvailableSlots(
-            args.doctorId,
-            args.date
-          );
-
-        return {
-          outputStr:
-            result.message,
-
-          rawPayload: result,
-        };
+      if (name === "check_availability") {
+        const result = await schedulerService.getAvailableSlots(args.doctorId, args.date);
+        return { outputStr: result.message, rawPayload: result };
       }
 
-      // BOOK
-      if (
-        name ===
-        "book_appointment"
-      ) {
-        const result =
-          await schedulerService.bookAppointment(
-            {
-              patientPhone:
-                args.patientPhone ||
-                phone,
-
-              patientName:
-                args.patientName ||
-                "Patient",
-
-              doctorId:
-                args.doctorId,
-
-              date: args.date,
-
-              time: args.time,
-            }
-          );
-
-        return {
-          outputStr:
-            result.message,
-
-          rawPayload: result,
-        };
+      if (name === "book_appointment") {
+        const result = await schedulerService.bookAppointment({
+          patientPhone: args.patientPhone || phone,
+          patientName: args.patientName || "Patient",
+          doctorId: args.doctorId,
+          date: args.date,
+          time: args.time,
+        });
+        return { outputStr: result.message, rawPayload: result };
       }
 
-      // RESCHEDULE
-      if (
-        name ===
-        "reschedule_appointment"
-      ) {
-        const result =
-          await schedulerService.rescheduleAppointment(
-            {
-              appointmentId:
-                args.appointmentId,
-
-              newDate:
-                args.newDate,
-
-              newTime:
-                args.newTime,
-            }
-          );
-
-        return {
-          outputStr:
-            result.message,
-
-          rawPayload: result,
-        };
+      if (name === "reschedule_appointment") {
+        const result = await schedulerService.rescheduleAppointment({
+          appointmentId: args.appointmentId,
+          newDate: args.newDate,
+          newTime: args.newTime,
+        });
+        return { outputStr: result.message, rawPayload: result };
       }
 
-      // CANCEL
-      if (
-        name ===
-        "cancel_appointment"
-      ) {
-        const result =
-          await schedulerService.cancelAppointment(
-            args.appointmentId
-          );
-
-        return {
-          outputStr:
-            result.message,
-
-          rawPayload: result,
-        };
+      if (name === "cancel_appointment") {
+        const result = await schedulerService.cancelAppointment(args.appointmentId);
+        return { outputStr: result.message, rawPayload: result };
       }
 
-      return {
-        outputStr:
-          "Unknown tool",
-
-        rawPayload: {},
-      };
+      return { outputStr: "Unknown tool", rawPayload: {} };
     } catch (err: any) {
-      return {
-        outputStr:
-          err.message,
-
-        rawPayload: {
-          error: err.message,
-        },
-      };
+      return { outputStr: err.message, rawPayload: { error: err.message } };
     }
   }
 }
 
-export const clinicalAgentOrchestrator =
-  new ClinicalAgentOrchestrator();
+export const clinicalAgentOrchestrator = new ClinicalAgentOrchestrator();

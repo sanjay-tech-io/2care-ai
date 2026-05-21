@@ -91,16 +91,11 @@ export class SchedulerService {
       };
     }
 
-    // 3. Conflict / Double booking detection
-    const appts = await redisStore.getAppointments();
-    const alreadyBooked = appts.some(x =>
-      x.doctorId === doctorId &&
-      x.date === date &&
-      x.time === time &&
-      x.status === "scheduled"
-    );
-
-    if (alreadyBooked) {
+    // 3. Redis slot lock check (Issue 3)
+    const slotKey = `slot:${doctorId}:${date}:${time}`;
+    const existingLock = await redisStore.get(slotKey);
+    if (existingLock) {
+      const appts = await redisStore.getAppointments();
       const bookedSlots = appts
         .filter(x => x.doctorId === doctorId && x.date === date && x.status === "scheduled")
         .map(x => x.time);
@@ -130,7 +125,10 @@ export class SchedulerService {
       await redisStore.savePatient(patient);
     }
 
-    // 5. Create
+    // 5. Lock the slot in Redis
+    await redisStore.set(slotKey, patientPhone);
+
+    // 6. Create appointment
     const appointment = await redisStore.createAppointment({
       patientPhone,
       patientName,

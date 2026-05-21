@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Doctor, Patient, Appointment, LatencyLog, TraceStep, Campaign, Language } from "./types";
+import { Doctor, Patient, Appointment, LatencyLog, TraceStep, Campaign, Language, ConversationStep } from "./types";
 import DoctorAvailability from "./components/DoctorAvailability";
 import ActiveReservations from "./components/ActiveReservations";
 import VoiceConsole from "./components/VoiceConsole";
@@ -15,7 +15,8 @@ import {
   Database, 
   Mic,
   LineChart,
-  GitBranch
+  GitBranch,
+  RefreshCw
 } from "lucide-react";
 
 export default function App() {
@@ -37,6 +38,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"console" | "dashboard" | "latency" | "architecture">("console");
   const [activeLanguage, setActiveLanguage] = useState<Language>(Language.ENGLISH);
   const [systemDate] = useState<string>("2026-05-21");
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Session state for chat persistence
   const [isOnboarded, setIsOnboarded] = useState<boolean>(false);
@@ -44,16 +46,20 @@ export default function App() {
   const [currentPatientPhone, setCurrentPatientPhone] = useState<string>("");
   const [sessionId] = useState<string>(() => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
 
-  // Fetch all core databases
+  // ================================================
+  // FETCH ALL DATA FROM REDIS BACKEND
+  // ================================================
   const refreshAllSystemData = async () => {
+    setIsRefreshing(true);
     try {
-      const [docRes, patRes, apptRes, logRes, traceRes, campRes] = await Promise.all([
+      const [docRes, patRes, apptRes, logRes, traceRes, campRes, sessionRes] = await Promise.all([
         fetch("/api/doctors"),
         fetch("/api/patients"),
         fetch("/api/appointments"),
         fetch("/api/logs"),
         fetch("/api/traces"),
-        fetch("/api/campaigns")
+        fetch("/api/campaigns"),
+        fetch("/api/sessions")
       ]);
 
       if (docRes.ok) setDoctors(await docRes.json());
@@ -62,14 +68,30 @@ export default function App() {
       if (logRes.ok) setLatencyLogs(await logRes.json());
       if (traceRes.ok) setTraces(await traceRes.json());
       if (campRes.ok) setCampaigns(await campRes.json());
+      if (sessionRes.ok) {
+        const activeSessions = await sessionRes.json();
+        setActiveConversations(activeSessions);
+      }
     } catch (exp) {
       console.error("Failed fetching clinical caches:", exp);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
+  // Initial load
   useEffect(() => {
     refreshAllSystemData();
   }, []);
+
+  // Poll for updates every 5 seconds when dashboard is visible
+  useEffect(() => {
+    if (activeTab !== "dashboard") return;
+    const interval = setInterval(() => {
+      refreshAllSystemData();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeTab]);
 
   // Update lists upon new trace/latencies from socket
   const handleNewBookingResult = (newTrace: Omit<TraceStep, "id" | "timestamp">, latencies: any) => {
@@ -95,6 +117,9 @@ export default function App() {
       },
       ...prev
     ]);
+    
+    // Force a full data refresh to sync dashboard
+    refreshAllSystemData();
   };
 
   // Handle patient onboarding
@@ -112,9 +137,21 @@ export default function App() {
       sessionId,
       timestamp: Date.now()
     }));
+    
+    // Register session in Redis backend
+    fetch("/api/sessions/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        phone,
+        patientName: name,
+        language,
+        sessionId
+      })
+    }).catch(e => console.warn("Session registration:", e));
   };
 
-  // Load existing session on mount
+  // Load existing session from backend
   useEffect(() => {
     const savedSession = localStorage.getItem('patient_session');
     if (savedSession) {
@@ -126,6 +163,16 @@ export default function App() {
           setCurrentPatientPhone(session.phone);
           setActiveLanguage(session.language);
           setIsOnboarded(true);
+          
+          // Restore Redis session
+          fetch(`/api/session/${session.phone}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (data) {
+                console.log("[SESSION] Restored from Redis:", data);
+              }
+            })
+            .catch(e => console.warn("[SESSION] Restore failed:", e));
         }
       } catch (e) {
         console.error('Failed to restore session:', e);
@@ -164,7 +211,6 @@ export default function App() {
       if (response.ok) {
         const details = await response.json();
         handleNewBookingResult(details.trace, details.latencies);
-        refreshAllSystemData();
       }
     } catch (err) {
       console.error("Failed triggering simulated backend voice process:", err);
@@ -235,18 +281,35 @@ export default function App() {
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
                 </span>
-                <span className="text-[10px] font-semibold text-emerald-400 font-mono">LIVE</span>
+                <span className="text-[10px] font-semibold text-emerald-400 font-mono">
+                  {appointments.filter(a => a.status === "scheduled").length} BOOKED
+                </span>
               </div>
               
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
                 <Database className="w-3 h-3 text-cyan-400" />
-                <span className="text-[10px] font-semibold text-cyan-400 font-mono">Redis</span>
+                <span className="text-[10px] font-semibold text-cyan-400 font-mono">
+                  {patients.length} Patients
+                </span>
               </div>
 
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/50 border border-white/[0.06]">
                 <Cpu className="w-3 h-3 text-slate-400" />
-                <span className="text-[10px] font-semibold text-slate-300 font-mono">450ms</span>
+                <span className="text-[10px] font-semibold text-slate-300 font-mono">
+                  {doctors.length} Doctors
+                </span>
               </div>
+              
+              {/* Refresh Button */}
+              <button
+                onClick={refreshAllSystemData}
+                disabled={isRefreshing}
+                className="px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 transition-all disabled:opacity-40 flex items-center gap-1.5"
+                title="Force sync all data"
+              >
+                <RefreshCw className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`} />
+                <span className="text-[10px] font-semibold font-mono">SYNC</span>
+              </button>
             </div>
 
           </div>
@@ -257,10 +320,9 @@ export default function App() {
       <main className="flex-1 pt-[72px] pb-8">
         <div className="max-w-[1600px] mx-auto px-6">
           
-          {/* Voice Console Tab - ALWAYS MOUNTED for state persistence */}
+          {/* Voice Console Tab */}
           <div className={activeTab === "console" ? "block animate-fade-in-up" : "hidden"}>
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-              {/* Primary Voice Console - 65% */}
               <div className="lg:col-span-3">
                 <VoiceConsole
                   patients={patients}
@@ -274,14 +336,14 @@ export default function App() {
                 />
               </div>
               
-              {/* AI Orchestration Panel - 35% */}
+              {/* AI Orchestration Panel */}
               <div className="lg:col-span-2">
                 <ReasoningTrace traces={traces} />
               </div>
             </div>
           </div>
 
-          {/* Operations Tab - ALWAYS MOUNTED */}
+          {/* Operations Tab */}
           <div className={activeTab === "dashboard" ? "block space-y-6 animate-fade-in-up" : "hidden"}>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <DoctorAvailability
@@ -305,12 +367,12 @@ export default function App() {
             />
           </div>
 
-          {/* Performance Tab - ALWAYS MOUNTED */}
+          {/* Performance Tab */}
           <div className={activeTab === "latency" ? "block max-w-4xl mx-auto animate-fade-in-up" : "hidden"}>
             <LatencyMonitor logs={latencyLogs} />
           </div>
 
-          {/* Architecture Tab - ALWAYS MOUNTED */}
+          {/* Architecture Tab */}
           <div className={activeTab === "architecture" ? "block animate-fade-in-up" : "hidden"}>
             <ArchitectureMermaid />
           </div>
@@ -318,7 +380,7 @@ export default function App() {
         </div>
       </main>
 
-      {/* Minimal Footer */}
+      {/* Footer */}
       <footer className="border-t border-white/[0.06] py-4 px-6">
         <div className="max-w-[1600px] mx-auto flex items-center justify-between">
           <p className="text-[11px] text-slate-600 font-mono">2026 Aarogi Clinical Systems</p>
@@ -334,6 +396,10 @@ export default function App() {
             <span className="flex items-center gap-1.5">
               <span className="w-1 h-1 rounded-full bg-teal-500"></span>
               Live Context
+            </span>
+            <span className="flex items-center gap-1.5 text-emerald-400">
+              <span className="w-1 h-1 rounded-full bg-emerald-500"></span>
+              {appointments.length} Appts
             </span>
           </div>
         </div>

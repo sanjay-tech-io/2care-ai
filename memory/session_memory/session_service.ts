@@ -1,5 +1,5 @@
 import { redisStore } from "../../database/redis/redis_service";
-import { SessionData, Language, ChatMessage } from "../../src/types";
+import { SessionData, Language, ChatMessage, ConversationStep } from "../../src/types";
 
 export class SessionService {
   private static SESSION_PREFIX = "cliSession:";
@@ -12,7 +12,12 @@ export class SessionService {
     
     if (value) {
       try {
-        return JSON.parse(value);
+        const parsed = JSON.parse(value);
+        // Ensure currentStep is present (backward compat)
+        if (!parsed.currentStep) {
+          parsed.currentStep = ConversationStep.GREETING;
+        }
+        return parsed;
       } catch (err) {
         console.error("Failed to parse Redis booking session, restarting session:", err);
       }
@@ -23,6 +28,7 @@ export class SessionService {
     return {
       patientPhone: phoneNumber,
       patientName: patientObj?.name,
+      currentStep: ConversationStep.GREETING,
       activeIntent: "none",
       pendingConfirmation: false,
       bookingState: {},

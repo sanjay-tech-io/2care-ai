@@ -74,6 +74,20 @@ const initialDoctors: Doctor[] = [
     specialty: "Orthopedics",
     languages: [Language.ENGLISH, Language.HINDI, Language.TAMIL],
     slots: ["10:00 AM", "11:00 AM", "12:00 PM", "03:00 PM", "04:00 PM", "05:00 PM"]
+  },
+  {
+    id: "doc-5",
+    name: "Dr. Meena Reddy",
+    specialty: "Dermatology",
+    languages: [Language.ENGLISH, Language.TAMIL],
+    slots: ["09:00 AM", "10:30 AM", "11:30 AM", "02:00 PM", "03:30 PM", "04:30 PM"]
+  },
+  {
+    id: "doc-6",
+    name: "Dr. Anil Kumar",
+    specialty: "Neurology",
+    languages: [Language.ENGLISH, Language.TAMIL],
+    slots: ["09:30 AM", "10:30 AM", "11:00 AM", "01:30 PM", "03:00 PM", "04:30 PM"]
   }
 ];
 
@@ -289,41 +303,46 @@ export class RedisService {
   // ----------------- High-Level Storage API -----------------
 
   async getDoctors(): Promise<Doctor[]> {
-    const docKeys = await this.keys("doctor:*");
+     console.log("[DEBUG] dbStore keys:", Array.from(this.dbStore.keys()).slice(0, 10));
     const doctors: Doctor[] = [];
-    for (const k of docKeys) {
-      const data = await this.hget(k, "data");
-      if (data) doctors.push(JSON.parse(data));
+    for (const [k] of this.dbStore.entries()) {
+      if (k.startsWith("doctor:") && k.endsWith("#field#data")) {
+        const record = this.dbStore.get(k);
+        if (record) doctors.push(JSON.parse(record.value));
+      }
     }
     return doctors.sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async getPatients(): Promise<Patient[]> {
-    const patKeys = await this.keys("patient:*");
     const patients: Patient[] = [];
-    for (const k of patKeys) {
-      const data = await this.hget(k, "data");
-      if (data) patients.push(JSON.parse(data));
+    for (const [k] of this.dbStore.entries()) {
+      if (k.startsWith("patient:") && k.endsWith("#field#data")) {
+        const record = this.dbStore.get(k);
+        if (record) patients.push(JSON.parse(record.value));
+      }
     }
     return patients.sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  async getAppointments(): Promise<Appointment[]> {
-    const apptKeys = await this.keys("appointment:*");
+async getAppointments(): Promise<Appointment[]> {
     const appts: Appointment[] = [];
-    for (const k of apptKeys) {
-      const data = await this.hget(k, "data");
-      if (data) appts.push(JSON.parse(data));
+    for (const [k] of this.dbStore.entries()) {
+      if (k.startsWith("appointment:") && k.endsWith("#field#data")) {
+        const record = this.dbStore.get(k);
+        if (record) appts.push(JSON.parse(record.value));
+      }
     }
     return appts.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  async getCampaigns(): Promise<Campaign[]> {
-    const campKeys = await this.keys("campaign:*");
+async getCampaigns(): Promise<Campaign[]> {
     const campaigns: Campaign[] = [];
-    for (const k of campKeys) {
-      const data = await this.hget(k, "data");
-      if (data) campaigns.push(JSON.parse(data));
+    for (const [k] of this.dbStore.entries()) {
+      if (k.startsWith("campaign:") && k.endsWith("#field#data")) {
+        const record = this.dbStore.get(k);
+        if (record) campaigns.push(JSON.parse(record.value));
+      }
     }
     return campaigns.sort((a, b) => a.id.localeCompare(b.id));
   }

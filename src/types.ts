@@ -8,6 +8,16 @@ export enum Language {
   TAMIL = "Tamil"
 }
 
+export enum ConversationStep {
+  GREETING = "GREETING",
+  SPECIALIST_SELECTION = "SPECIALIST_SELECTION",
+  DOCTOR_SELECTION = "DOCTOR_SELECTION",
+  DATE_SELECTION = "DATE_SELECTION",
+  SLOT_SELECTION = "SLOT_SELECTION",
+  BOOKING_CONFIRMATION = "BOOKING_CONFIRMATION",
+  COMPLETED = "COMPLETED",
+}
+
 export interface Patient {
   id: string;
   name: string;
@@ -46,6 +56,7 @@ export interface BookingState {
   specialty?: string;
   date?: string;
   time?: string;
+  availableSlots?: string[];
 }
 
 export interface ChatMessage {
@@ -59,6 +70,7 @@ export interface ChatMessage {
 export interface SessionData {
   patientPhone?: string;
   patientName?: string;
+  currentStep: ConversationStep;
   activeIntent?: string; // "book" | "reschedule" | "cancel" | "history" | "none"
   pendingConfirmation?: boolean;
   bookingState: BookingState;
