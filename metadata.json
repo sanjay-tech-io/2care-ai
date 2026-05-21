@@ -1,0 +1,6 @@
+{
+  "name": "Clinical Appointment Booking AI Agent",
+  "description": "Real-time multilingual voice AI agent for clinical appointment scheduling, managing reservations, checking doctor availabilities, and simulating outbound campaign reminders with reasoning traces.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

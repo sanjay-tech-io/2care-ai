@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  clinical-voice-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clinical-voice-agent-srv
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      - clinical-redis
+    restart: always
+
+  clinical-redis:
+    image: redis:7.0-alpine
+    container_name: clinical-redis-srv
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_volume:/data
+    restart: always
+
+volumes:
+  redis_data_volume:
+    driver: local
