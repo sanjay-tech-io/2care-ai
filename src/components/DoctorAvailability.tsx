@@ -44,6 +44,8 @@ export default function DoctorAvailability({ doctors, appointments, selectedDate
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {doctors.map(doc => {
           const booked = getBookedSlots(doc.id);
+          // BUG 1 FIX: Only show available slots, not all slots
+          const availableSlots = doc.slots.filter(slot => !booked.includes(slot));
           return (
             <div 
               key={doc.id} 
@@ -59,35 +61,26 @@ export default function DoctorAvailability({ doctors, appointments, selectedDate
                 <span className="text-[10px] font-mono text-slate-600">ID: {doc.id}</span>
               </div>
 
-              {/* Supported Languages */}
-              <div className="flex items-center gap-1.5 mt-3 text-xs text-slate-400">
-                <Languages className="w-3.5 h-3.5 text-slate-500" />
-                <span className="text-[11px] font-medium text-slate-400">
-                  {doc.languages.join(", ")}
-                </span>
-              </div>
+              {/* BUG 3 FIX: Removed language display - all doctors support all languages by default */}
 
-              {/* Slots List */}
+              {/* Slots List - BUG 1 FIX: Show only available slots */}
               <div className="mt-4">
                 <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider block mb-1.5">
-                  Slots ({doc.slots.length})
+                  Available Slots ({availableSlots.length})
                 </span>
                 <div className="flex flex-wrap gap-1.5 font-sans">
-                  {doc.slots.map(slot => {
-                    const isBooked = booked.includes(slot);
-                    return (
+                  {availableSlots.length > 0 ? (
+                    availableSlots.map(slot => (
                       <span
                         key={slot}
-                        className={`text-[9px] px-2 py-1 rounded border font-mono ${
-                          isBooked 
-                            ? "bg-red-500/15 text-red-400 border-red-500/30" 
-                            : "bg-cyan-500/15 text-cyan-400 border-cyan-500/30 font-medium"
-                        }`}
+                        className="text-[9px] px-2 py-1 rounded border font-mono bg-cyan-500/15 text-cyan-400 border-cyan-500/30 font-medium"
                       >
                         {slot}
                       </span>
-                    );
-                  })}
+                    ))
+                  ) : (
+                    <span className="text-[9px] text-red-400 font-medium">No slots available</span>
+                  )}
                 </div>
               </div>
             </div>

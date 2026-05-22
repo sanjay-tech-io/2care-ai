@@ -13,39 +13,6 @@ import { Patient, Doctor, Appointment, SessionData, LatencyLog, TraceStep, Campa
 
 // ----------------- Initial Seeds -----------------
 
-const initialPatients: Patient[] = [
-  {
-    id: "pat-1",
-    name: "Sanjay Kumar",
-    phone: "9876543210",
-    email: "sanjay@gmail.com",
-    preferredLanguage: Language.TAMIL,
-    preferredDoctorId: "doc-1",
-    age: 34,
-    gender: "Male"
-  },
-  {
-    id: "pat-2",
-    name: "Rajesh Khanna",
-    phone: "8765432109",
-    email: "rajesh@yahoo.com",
-    preferredLanguage: Language.HINDI,
-    preferredDoctorId: "doc-2",
-    age: 45,
-    gender: "Male"
-  },
-  {
-    id: "pat-3",
-    name: "Alicia Smith",
-    phone: "7654321098",
-    email: "alicia@outlook.com",
-    preferredLanguage: Language.ENGLISH,
-    preferredDoctorId: "doc-3",
-    age: 28,
-    gender: "Female"
-  }
-];
-
 const initialDoctors: Doctor[] = [
   {
     id: "doc-1",
@@ -58,14 +25,14 @@ const initialDoctors: Doctor[] = [
     id: "doc-2",
     name: "Dr. Rajesh Patel",
     specialty: "Pediatrics",
-    languages: [Language.ENGLISH, Language.HINDI],
+    languages: [Language.ENGLISH, Language.HINDI, Language.TAMIL],
     slots: ["09:30 AM", "10:30 AM", "11:30 AM", "01:30 PM", "02:30 PM", "03:30 PM"]
   },
   {
     id: "doc-3",
     name: "Dr. Anita Desai",
     specialty: "Cardiology",
-    languages: [Language.ENGLISH, Language.TAMIL],
+    languages: [Language.ENGLISH, Language.HINDI, Language.TAMIL],
     slots: ["09:00 AM", "10:00 AM", "11:00 AM", "02:00 PM", "03:00 PM", "04:00 PM"]
   },
   {
@@ -79,78 +46,15 @@ const initialDoctors: Doctor[] = [
     id: "doc-5",
     name: "Dr. Meena Reddy",
     specialty: "Dermatology",
-    languages: [Language.ENGLISH, Language.TAMIL],
+    languages: [Language.ENGLISH, Language.HINDI, Language.TAMIL],
     slots: ["09:00 AM", "10:30 AM", "11:30 AM", "02:00 PM", "03:30 PM", "04:30 PM"]
   },
   {
     id: "doc-6",
     name: "Dr. Anil Kumar",
     specialty: "Neurology",
-    languages: [Language.ENGLISH, Language.TAMIL],
+    languages: [Language.ENGLISH, Language.HINDI, Language.TAMIL],
     slots: ["09:30 AM", "10:30 AM", "11:00 AM", "01:30 PM", "03:00 PM", "04:30 PM"]
-  }
-];
-
-const initialAppointments: Appointment[] = [
-  {
-    id: "appt-101",
-    patientPhone: "9876543210",
-    patientName: "Sanjay Kumar",
-    doctorId: "doc-1",
-    doctorName: "Dr. Priya Sharma",
-    specialty: "General Medicine",
-    date: "2026-05-22",
-    time: "10:00 AM",
-    status: "scheduled",
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: "appt-102",
-    patientPhone: "8765432109",
-    patientName: "Rajesh Khanna",
-    doctorId: "doc-2",
-    doctorName: "Dr. Rajesh Patel",
-    specialty: "Pediatrics",
-    date: "2026-05-23",
-    time: "10:30 AM",
-    status: "scheduled",
-    createdAt: new Date().toISOString()
-  }
-];
-
-const initialCampaigns: Campaign[] = [
-  {
-    id: "camp-101",
-    patientName: "Sanjay Kumar",
-    patientPhone: "9876543210",
-    doctorName: "Dr. Priya Sharma",
-    date: "2026-05-22",
-    time: "10:00 AM",
-    type: "reminder",
-    details: "Appointment Reminder: Tomorrow at 10:00 AM.",
-    status: "pending"
-  },
-  {
-    id: "camp-102",
-    patientName: "Rajesh Khanna",
-    patientPhone: "8765432109",
-    doctorName: "Dr. Rajesh Patel",
-    date: "2026-05-23",
-    time: "10:30 AM",
-    type: "reminder",
-    details: "Vaccination Slot: DPT Pfizer available.",
-    status: "pending"
-  },
-  {
-    id: "camp-103",
-    patientName: "Alicia Smith",
-    patientPhone: "7654321098",
-    doctorName: "Dr. Anita Desai",
-    date: "2026-05-25",
-    time: "02:00 PM",
-    type: "follow-up",
-    details: "Cardiac screening checkup reminder.",
-    status: "pending"
   }
 ];
 
@@ -172,24 +76,9 @@ export class RedisService {
   }
 
   private seedDatabase() {
-    // Seed Patients
-    initialPatients.forEach(p => {
-      this.hset(`patient:${p.phone}`, "data", JSON.stringify(p));
-    });
-
-    // Seed Doctors
+    // Seed ONLY Doctors - they must always be available on startup
     initialDoctors.forEach(d => {
       this.hset(`doctor:${d.id}`, "data", JSON.stringify(d));
-    });
-
-    // Seed Appointments
-    initialAppointments.forEach(a => {
-      this.hset(`appointment:${a.id}`, "data", JSON.stringify(a));
-    });
-
-    // Seed Campaigns
-    initialCampaigns.forEach(c => {
-      this.hset(`campaign:${c.id}`, "data", JSON.stringify(c));
     });
   }
 
@@ -369,6 +258,10 @@ async getCampaigns(): Promise<Campaign[]> {
       finalPatient.id = `pat-${Date.now()}`;
     }
     await this.hset(`patient:${finalPatient.phone}`, "data", JSON.stringify(finalPatient));
+
+    // BUG 2 FIX: Removed auto-creation of follow-up campaign
+    // Only the appointment reminder campaign should be created (in createAppointment)
+
     return finalPatient;
   }
 
@@ -390,6 +283,31 @@ async getCampaigns(): Promise<Campaign[]> {
       createdAt: new Date().toISOString()
     };
     await this.hset(`appointment:${id}`, "data", JSON.stringify(newAppt));
+
+    // BUG 2 FIX PART D: Check if campaign already exists before creating
+    const existingCampaigns = await this.getCampaigns();
+    const existing = existingCampaigns.find(c => 
+      c.patientPhone === newAppt.patientPhone && 
+      c.date === newAppt.date &&
+      c.doctorName === newAppt.doctorName
+    );
+    
+    if (!existing) {
+      // Only create campaign if one doesn't already exist for this booking
+      const reminderCampaign: Campaign = {
+        id: `camp-${Date.now()}`,
+        patientName: newAppt.patientName,
+        patientPhone: newAppt.patientPhone,
+        doctorName: newAppt.doctorName,
+        date: newAppt.date,
+        time: newAppt.time,
+        type: "reminder",
+        details: `Appointment confirmed with ${newAppt.doctorName} on ${newAppt.date} at ${newAppt.time}.`,
+        status: "pending"
+      };
+      await this.hset(`campaign:${reminderCampaign.id}`, "data", JSON.stringify(reminderCampaign));
+    }
+
     return newAppt;
   }
 

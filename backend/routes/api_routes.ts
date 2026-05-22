@@ -94,7 +94,43 @@ router.get("/sessions", async (req, res) => {
   }
 });
 
-// Register a new session
+// CHANGE 5: Get all live sessions from Redis
+router.get("/live-sessions", async (req, res) => {
+  try {
+    const sessionKeys = await redisStore.keys("liveSession:*");
+    const sessions: Array<{
+      phone: string;
+      patientName: string;
+      language: Language;
+      startTime: number;
+      lastMessage: string;
+    }> = [];
+
+    for (const key of sessionKeys) {
+      const phone = key.replace("liveSession:", "");
+      const data = await redisStore.get(key);
+      if (data) {
+        try {
+          const parsed = JSON.parse(data);
+          sessions.push({
+            phone: phone,
+            patientName: parsed.patientName || "Guest",
+            language: parsed.language || Language.ENGLISH,
+            startTime: parsed.startTime || Date.now() - 60000,
+            lastMessage: parsed.lastMessage || ""
+          });
+        } catch (e) {
+          // Skip malformed
+        }
+      }
+    }
+
+    res.json(sessions);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post("/sessions/register", async (req, res) => {
   try {
     const { phone, patientName, language, sessionId } = req.body;

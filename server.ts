@@ -11,6 +11,7 @@ import { WebSocketServer } from "ws";
 import { createServer as createViteServer } from "vite";
 import { apiRouter } from "./backend/routes/api_routes";
 import { voiceSocketBroker } from "./backend/websocket/voice_socket";
+import { redisStore } from "./database/redis/redis_service";
 
 const PORT = 4000;
 const app = express();
@@ -19,6 +20,20 @@ app.use(express.json());
 
 // Mount the modular clinical REST endpoints API
 app.use("/api", apiRouter);
+
+// ================================================
+// PART A: Get Chat History Endpoint
+// ================================================
+app.get('/api/chat-history/:phone', async (req, res) => {
+  const { phone } = req.params;
+  try {
+    const historyRaw = await redisStore.hget(`session:${phone}`, 'chatHistory');
+    const history = historyRaw ? JSON.parse(historyRaw) : [];
+    res.json({ success: true, history });
+  } catch (e) {
+    res.json({ success: true, history: [] });
+  }
+});
 
 // Initialize HTTP server
 const server = http.createServer(app);

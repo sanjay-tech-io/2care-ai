@@ -12,8 +12,49 @@ import {
   Orbit,
   UserPlus,
   MessageCircle,
-  AudioWaveform
+  AudioWaveform,
+  Plus,
+  X
 } from "lucide-react";
+
+interface NewChatDialogProps {
+  isOpen: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+function NewChatDialog({ isOpen, onConfirm, onCancel }: NewChatDialogProps) {
+  if (!isOpen) return null;
+  
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel}></div>
+      <div className="relative bg-[#101827] border border-white/[0.06] rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+        <div className="flex items-center justify-center mb-4">
+          <div className="w-12 h-12 rounded-full bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center">
+            <Plus className="w-6 h-6 text-cyan-400" />
+          </div>
+        </div>
+        <h3 className="text-base font-semibold text-white text-center mb-2">Start a new chat?</h3>
+        <p className="text-xs text-slate-400 text-center mb-6">This will end the current session.</p>
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 px-4 py-2.5 rounded-lg border border-white/[0.06] text-slate-300 text-xs font-medium hover:bg-white/[0.04] transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="flex-1 px-4 py-2.5 rounded-lg bg-cyan-500 text-black text-xs font-semibold hover:bg-cyan-400 transition-all"
+          >
+            Yes, New Chat
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   patients: Patient[];
@@ -22,8 +63,15 @@ interface Props {
   activeLanguage: Language;
   setActiveLanguage: (lang: Language) => void;
   isOnboarded: boolean;
-  onOnboard: (name: string, phone: string, language: Language) => void;
+  onOnboard: (name: string, phone: string, age: number, language: Language) => void;
   sessionId: string;
+  // PART D: Viewing history from Live Conversations
+  viewingHistory?: {
+    phone: string;
+    patientName: string;
+    messages: Array<{ role: string; text: string; timestamp: string }>;
+  } | null;
+  onCloseHistory?: () => void;
 }
 
 interface Message {
@@ -338,9 +386,12 @@ export default function VoiceConsole({
   setActiveLanguage,
   isOnboarded,
   onOnboard,
-  sessionId
+  sessionId,
+  viewingHistory,
+  onCloseHistory
 }: Props) {
   const [patientName, setPatientName] = useState<string>("");
+  const [patientAge, setPatientAge] = useState<string>("");
   const [patientPhone, setPatientPhone] = useState<string>("");
   
   const [wsStatus, setWsStatus] = useState<"connected" | "disconnected" | "connecting">("disconnected");
@@ -356,8 +407,28 @@ export default function VoiceConsole({
   const initializedRef = useRef(false);
   const renderedMessageIds = useRef(new Set<string>());
 
+  // FIX: Use useRef to persist transcript buffer across renders
+  const transcriptBufferRef = useRef("");
+
   // Live speaking state
   const [speakingState, setSpeakingState] = useState<"idle" | "speaking" | "processing">("idle");
+
+  // New Chat dialog state
+  const [showNewChatDialog, setShowNewChatDialog] = useState(false);
+
+  // New Chat button click handler
+  const onNewChatButtonClick = () => {
+    // If no session has started yet (no registration), just reset form fields without dialog
+    if (!isOnboarded && !patientName && !patientPhone) {
+      // Just reset the form fields
+      setPatientName('');
+      setPatientAge('');
+      setPatientPhone('');
+      return;
+    }
+    // Show confirmation dialog
+    setShowNewChatDialog(true);
+  };
 
   // Smooth auto-scroll to bottom on new messages
   useEffect(() => {
@@ -510,8 +581,8 @@ export default function VoiceConsole({
   };
 
   const handleOnboarding = () => {
-    if (patientName.trim() && patientPhone.trim()) {
-      onOnboard(patientName.trim(), patientPhone.trim(), activeLanguage);
+    if (patientName.trim() && patientPhone.trim() && patientAge) {
+      onOnboard(patientName.trim(), patientPhone.trim(), parseInt(patientAge, 10), activeLanguage);
       setShowOnboarding(false);
       setTimeout(() => connectWebSocket(), 100);
     }
@@ -526,20 +597,32 @@ export default function VoiceConsole({
 
     try {
       const rec = new SpeechRecognition();
-      rec.continuous = false;
-      rec.interimResults = false;
+      rec.continuous = true;
+      rec.interimResults = true;
       rec.lang = activeLanguage === Language.TAMIL ? "ta-IN" : activeLanguage === Language.HINDI ? "hi-IN" : "en-US";
+
+      // Clear the buffer for new recording
+      transcriptBufferRef.current = "";
 
       rec.onstart = () => setIsRecording(true);
       rec.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        if (transcript) sendTranscriptionToServer(transcript);
+        // Accumulate ALL results (both interim and final) into buffer
+        let fullTranscript = "";
+        for (let i = 0; i < event.results.length; i++) {
+          fullTranscript += event.results[i][0].transcript;
+        }
+        transcriptBufferRef.current = fullTranscript;
+        // Update UI only - do NOT send to backend while speaking
+        setInputText(fullTranscript);
       };
       rec.onerror = (err: any) => {
         console.error("[STT] Error:", err);
         setIsRecording(false);
       };
-      rec.onend = () => setIsRecording(false);
+      rec.onend = () => {
+        // CHANGED: Don't auto-send on stop. Wait for Stop button click.
+        setIsRecording(false);
+      };
 
       recognitionRef.current = rec;
       rec.start();
@@ -549,10 +632,24 @@ export default function VoiceConsole({
     }
   };
 
+  const stopRecordingAndSend = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      setIsRecording(false);
+      // Now send the final accumulated transcript
+      if (transcriptBufferRef.current.trim()) {
+        sendTranscriptionToServer(transcriptBufferRef.current.trim());
+        transcriptBufferRef.current = "";
+        setInputText("");
+      }
+    }
+  };
+
   const stopSpeechRecognition = () => {
     if (recognitionRef.current) {
       recognitionRef.current.stop();
       setIsRecording(false);
+      // Note: onend handler will send the transcript
     }
   };
 
@@ -601,9 +698,73 @@ export default function VoiceConsole({
     }
   };
 
+  // New Chat handler - resets everything (must be after connectWebSocket definition)
+  const handleNewChat = () => {
+    // STEP 1 — Close the existing WebSocket connection cleanly
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: 'disconnect' }));
+      socketRef.current.close();
+    }
+    socketRef.current = null;
+    setWsStatus("disconnected");
+
+    // STEP 2 — Stop any ongoing speech recognition
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    setIsRecording(false);
+
+    // STEP 3 — Stop any ongoing TTS audio playback
+    cancelAllSpeech();
+    setSpeakingState("idle");
+
+    // STEP 4 — Reset ALL state variables to their initial values
+    setMessages([]);
+    setInputText('');
+    setPatientName('');
+    setPatientAge('');
+    setPatientPhone('');
+    setShowOnboarding(true);
+    setIsModelThinking(false);
+    transcriptBufferRef.current = "";
+    renderedMessageIds.current.clear();
+
+    // STEP 5 — Show the registration form again (already done via setShowOnboarding above)
+
+    // STEP 6 — Establish a fresh WebSocket connection
+    // Reset initialization flag so a new connection will be made on next re-onboard
+    initializedRef.current = false;
+    
+    // Reconnect if was previously onboarded
+    if (isOnboarded) {
+      setTimeout(() => connectWebSocket(), 100);
+    }
+    
+    // Close the dialog
+    setShowNewChatDialog(false);
+  };
+
   return (
     <div className="bg-[#0B1220] rounded-2xl border border-white/[0.06] flex flex-col h-[640px] overflow-hidden">
       
+      {/* PART D: Viewing History Banner */}
+      {viewingHistory && viewingHistory.messages.length > 0 && (
+        <div className="px-5 py-3 bg-purple-500/20 border-b border-purple-500/30 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MessageCircle className="w-4 h-4 text-purple-400" />
+            <span className="text-xs text-purple-300 font-medium">
+              Viewing chat history for {viewingHistory.patientName} ({viewingHistory.phone})
+            </span>
+          </div>
+          <button
+            onClick={onCloseHistory}
+            className="px-2 py-1 rounded bg-purple-500/30 text-purple-300 text-[10px] hover:bg-purple-500/40 transition-all"
+          >
+            Close
+          </button>
+        </div>
+      )}
+
       {/* Premium Header */}
       <div className="px-5 py-4 border-b border-white/[0.06] bg-[#101827]/50">
         <div className="flex items-center justify-between">
@@ -646,6 +807,16 @@ export default function VoiceConsole({
 
           {/* Right Controls */}
           <div className="flex items-center gap-3">
+            {/* New Chat Button */}
+            <button
+              onClick={onNewChatButtonClick}
+              className="px-3 py-1.5 rounded-lg border border-cyan-500/40 bg-slate-900/50 text-cyan-400 text-[10px] font-semibold hover:bg-cyan-500/10 transition-all flex items-center gap-1.5"
+              title="Start a new chat"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              New Chat
+            </button>
+
             <div className="flex items-center gap-1 bg-slate-900/50 border border-white/[0.06] rounded-lg p-1">
               {([Language.ENGLISH, Language.HINDI, Language.TAMIL] as Language[]).map((lang) => (
                 <button
@@ -695,12 +866,21 @@ export default function VoiceConsole({
             <span className="text-sm font-medium text-white">Patient Onboarding</span>
           </div>
           
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <input
               type="text"
               placeholder="Your name"
               value={patientName}
               onChange={(e) => setPatientName(e.target.value)}
+              className="border border-white/[0.06] rounded-lg bg-slate-900/50 px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-cyan-500/50"
+            />
+            <input
+              type="number"
+              placeholder="Age"
+              min="1"
+              max="120"
+              value={patientAge}
+              onChange={(e) => setPatientAge(e.target.value)}
               className="border border-white/[0.06] rounded-lg bg-slate-900/50 px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-cyan-500/50"
             />
             <input
@@ -712,7 +892,7 @@ export default function VoiceConsole({
             />
             <button
               onClick={handleOnboarding}
-              disabled={!patientName.trim() || !patientPhone.trim()}
+              disabled={!patientName.trim() || !patientPhone.trim() || !patientAge}
               className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed text-black font-semibold text-xs px-4 py-2 rounded-lg transition-all flex items-center justify-center gap-2"
             >
               <MessageCircle className="w-4 h-4" />
@@ -724,7 +904,30 @@ export default function VoiceConsole({
 
       {/* Transcript Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#050816]/50">
-        {messages.length === 0 ? (
+        {/* PART D: Display history messages if viewingHistory is set */}
+        {viewingHistory && viewingHistory.messages.length > 0 ? (
+          viewingHistory.messages.map((m, idx) => (
+            <div 
+              key={idx}
+              className={`flex ${
+                m.role === "user" ? "justify-end" : "justify-start"
+              }`}
+            >
+              <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-xs ${
+                m.role === "user"
+                  ? "bg-cyan-600 text-white font-medium rounded-br-md"
+                  : "bg-[#101827] border border-white/[0.06] text-slate-200 rounded-bl-md"
+              }`}>
+                <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+                <div className={`text-[9px] mt-2 ${
+                  m.role === "user" ? "text-cyan-200" : "text-slate-600"
+                }`}>
+                  {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              </div>
+            </div>
+          ))
+        ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-500">
             <div className="relative mb-4">
               <div className="absolute inset-0 bg-cyan-500/20 rounded-full blur-2xl animate-pulse"></div>
@@ -814,7 +1017,7 @@ export default function VoiceConsole({
 
           {/* Recording Button */}
           <button
-            onClick={isRecording ? stopSpeechRecognition : startSpeechRecognition}
+            onClick={isRecording ? stopRecordingAndSend : startSpeechRecognition}
             disabled={!isOnboarded}
             className={`px-5 py-2.5 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 transition-all shrink-0 ${
               isRecording 
@@ -859,6 +1062,13 @@ export default function VoiceConsole({
 
         </div>
       </div>
+
+      {/* New Chat Confirmation Dialog */}
+      <NewChatDialog
+        isOpen={showNewChatDialog}
+        onConfirm={handleNewChat}
+        onCancel={() => setShowNewChatDialog(false)}
+      />
 
     </div>
   );

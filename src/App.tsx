@@ -40,6 +40,41 @@ export default function App() {
   const [systemDate] = useState<string>("2026-05-21");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // CHANGE 4: Track selected conversation for loading chat history
+  const [selectedConversationPhone, setSelectedConversationPhone] = useState<string | null>(null);
+  
+  // PART C: State for viewing chat history from Live Conversations
+  const [viewingHistory, setViewingHistory] = useState<{
+    phone: string;
+    patientName: string;
+    messages: Array<{ role: string; text: string; timestamp: string }>;
+  } | null>(null);
+
+  // PART C: Handler to load patient chat history when clicked
+  const handleSelectConversation = async (phone: string, patientName: string) => {
+    setSelectedConversationPhone(phone);
+    // Switch to voice console tab
+    setActiveTab("console");
+    
+    // Fetch chat history for this patient
+    try {
+      const response = await fetch(`/api/chat-history/${phone}`);
+      const data = await response.json();
+      setViewingHistory({
+        phone,
+        patientName,
+        messages: data.history || []
+      });
+    } catch (e) {
+      console.error('Failed to load chat history', e);
+      setViewingHistory({
+        phone,
+        patientName,
+        messages: []
+      });
+    }
+  };
+
   // Session state for chat persistence
   const [isOnboarded, setIsOnboarded] = useState<boolean>(false);
   const [currentPatientName, setCurrentPatientName] = useState<string>("");
@@ -52,14 +87,15 @@ export default function App() {
   const refreshAllSystemData = async () => {
     setIsRefreshing(true);
     try {
-      const [docRes, patRes, apptRes, logRes, traceRes, campRes, sessionRes] = await Promise.all([
+      const [docRes, patRes, apptRes, logRes, traceRes, campRes, sessionRes, liveSessionRes] = await Promise.all([
         fetch("/api/doctors"),
         fetch("/api/patients"),
         fetch("/api/appointments"),
         fetch("/api/logs"),
         fetch("/api/traces"),
         fetch("/api/campaigns"),
-        fetch("/api/sessions")
+        fetch("/api/sessions"),
+        fetch("/api/live-sessions")
       ]);
 
       if (docRes.ok) setDoctors(await docRes.json());
@@ -71,6 +107,31 @@ export default function App() {
       if (sessionRes.ok) {
         const activeSessions = await sessionRes.json();
         setActiveConversations(activeSessions);
+      }
+      // CHANGE 4: Fetch active live sessions from new endpoint
+      if (liveSessionRes.ok) {
+        const liveSessions = await liveSessionRes.json();
+        // Merge with existing activeConversations
+        if (liveSessions.length > 0) {
+          setActiveConversations(prev => {
+            const merged = [...prev];
+            for (const live of liveSessions) {
+              const exists = merged.find(s => s.phone === live.phone);
+              if (!exists) {
+                merged.push({
+                  phone: live.phone,
+                  patientName: live.patientName,
+                  language: live.language,
+                  intent: "general",
+                  startTime: live.startTime,
+                  messageCount: 0,
+                  lastActivity: Date.now()
+                });
+              }
+            }
+            return merged;
+          });
+        }
       }
     } catch (exp) {
       console.error("Failed fetching clinical caches:", exp);
@@ -123,7 +184,7 @@ export default function App() {
   };
 
   // Handle patient onboarding
-  const handleOnboard = (name: string, phone: string, language: Language) => {
+  const handleOnboard = (name: string, phone: string, age: number, language: Language) => {
     setCurrentPatientName(name);
     setCurrentPatientPhone(phone);
     setActiveLanguage(language);
@@ -133,6 +194,7 @@ export default function App() {
     localStorage.setItem('patient_session', JSON.stringify({
       name,
       phone,
+      age,
       language,
       sessionId,
       timestamp: Date.now()
@@ -145,6 +207,7 @@ export default function App() {
       body: JSON.stringify({
         phone,
         patientName: name,
+        age,
         language,
         sessionId
       })
@@ -333,6 +396,8 @@ export default function App() {
                   isOnboarded={isOnboarded}
                   onOnboard={handleOnboard}
                   sessionId={sessionId}
+                  viewingHistory={viewingHistory}
+                  onCloseHistory={() => setViewingHistory(null)}
                 />
               </div>
               
@@ -356,11 +421,16 @@ export default function App() {
                 patients={patients}
                 onRefresh={refreshAllSystemData}
               />
-              <ActiveConversations activeConversations={activeConversations} />
+              <ActiveConversations 
+                activeConversations={activeConversations} 
+                onSelectConversation={(phone, patientName) => handleSelectConversation(phone, patientName)}
+                selectedPhone={selectedConversationPhone || undefined}
+              />
             </div>
             
             <OutboundCampaigns
               campaigns={campaigns}
+              patients={patients}
               onTriggerCampaign={handleTriggerCampaign}
               onRefreshData={refreshAllSystemData}
               onSimulateOutboundVoice={handleSimulateOutboundVoice}

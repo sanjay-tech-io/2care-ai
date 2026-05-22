@@ -70,6 +70,7 @@ export interface ChatMessage {
 export interface SessionData {
   patientPhone?: string;
   patientName?: string;
+  patientAge?: number;
   currentStep: ConversationStep;
   activeIntent?: string; // "book" | "reschedule" | "cancel" | "history" | "none"
   pendingConfirmation?: boolean;

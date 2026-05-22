@@ -15,7 +15,30 @@ import {
   ConversationStep,
 } from "../../src/types";
 
-const SYSTEM_TODAY = "2026-05-21";
+// ================================================
+// DATE FORMATTING UTILITY
+// ================================================
+function formatDateLabel(dateStr: string): string {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(dateStr + 'T00:00:00');
+  target.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((target.getTime() - today.getTime()) / 86400000);
+  const options: Intl.DateTimeFormatOptions = { 
+    year: 'numeric', month: 'long', day: 'numeric' 
+  };
+  const formatted = target.toLocaleDateString('en-IN', options);
+  if (diffDays === 0) return `${formatted} (Today)`;
+  if (diffDays === 1) return `${formatted} (Tomorrow)`;
+  return formatted;
+}
+
+// Dynamic SYSTEM_TODAY - always computed at runtime
+function getSystemToday(): string {
+  return new Date().toISOString().split('T')[0];
+}
+
+const SYSTEM_TODAY = getSystemToday();
 
 // ================================================
 // INTENT EXTRACTION ENGINE
@@ -511,6 +534,24 @@ export class ClinicalAgentOrchestrator {
     // Simulated STT latency
     const sttLatency = 80 + Math.floor(Math.random() * 60);
 
+    // ================================================
+    // PART B: Append user message to chat history
+    // ================================================
+    if (userInput.trim()) {
+      const userMsgEntry = { 
+        role: 'user', 
+        text: userInput, 
+        timestamp: new Date().toISOString() 
+      };
+      try {
+        const userHistRaw = await redisStore.hget(`session:${phone}`, 'chatHistory');
+        const userHistory = userHistRaw ? JSON.parse(userHistRaw) : [];
+        userHistory.push(userMsgEntry);
+        const userTrimmed = userHistory.slice(-100);
+        await redisStore.hset(`session:${phone}`, 'chatHistory', JSON.stringify(userTrimmed));
+      } catch (e) { /* ignore */ }
+    }
+
     // ------------------------------------------------
     // ENSURE DOCTORS ARE SEEDED (Bug 1)
     // ------------------------------------------------
@@ -538,6 +579,13 @@ export class ClinicalAgentOrchestrator {
     const session = await sessionService.getSession(phone, currentPrefLanguage);
 
     // ------------------------------------------------
+    // REDIS SESSION CONTEXT - Read at start for Bug 1 fix
+    // ------------------------------------------------
+
+    const contextRaw = await redisStore.hget(`session:${phone}`, 'context');
+    const sessionContext = contextRaw ? JSON.parse(contextRaw) : null;
+
+    // ------------------------------------------------
     // LANGUAGE DETECTION
     // ------------------------------------------------
     
@@ -555,6 +603,149 @@ export class ClinicalAgentOrchestrator {
     let finalResponseText = "";
     let detectedIntent = "general";
     let nextStep: ConversationStep = session.currentStep;
+    let toolWasCalled = false;
+
+    // ================================================
+    // BUG 1 FIX: Handle AWAITING_TIME_SELECTION state directly
+    // ================================================
+    
+    if (sessionContext?.state === 'AWAITING_TIME_SELECTION') {
+      const availableSlots = sessionContext.availableSlots || [];
+      const extractedTime = parseTime(userInput);
+      
+      if (extractedTime && availableSlots.includes(extractedTime)) {
+        // Valid time found - proceed to booking
+        selectedTool = "book_appointment";
+        toolWasCalled = true;
+        
+        const bookTool = await this.executeClinicalTool(
+          "book_appointment",
+          {
+            patientPhone: phone,
+            patientName: patientObj?.name || overrideName || "Patient",
+            doctorId: sessionContext.doctorId,
+            date: sessionContext.targetDate,
+            time: extractedTime
+          },
+          phone
+        );
+        
+        const bookResult = bookTool.rawPayload as {
+          success: boolean;
+          message: string;
+        };
+        
+        if (bookResult.success) {
+          // Clear the Redis session context
+          await redisStore.hdel(`session:${phone}`, 'context');
+          await sessionService.clearSession(phone);
+          
+          if (detectedLang === Language.TAMIL) {
+            finalResponseText = `${sessionContext.doctorName} அவர்களின் சந்திப்பு ${sessionContext.targetDate} அன்று ${extractedTime}க்கு உறுதிப்படுத்தப்பட்டுள்ளது. உங்கள் சந்திப்புக்கு முன் உங்களுக்கு நினைவூட்டல் கிடைக்கும்.`;
+          } else if (detectedLang === Language.HINDI) {
+            finalResponseText = `${sessionContext.doctorName} की अपॉइंटमेंट ${sessionContext.targetDate} को ${extractedTime} बजे पुष्टि हो गई है। आपको अपनी अपॉइंटमेंट से पहले रिमाइंडर मिलेगा।`;
+          } else {
+            finalResponseText = `${sessionContext.doctorName}'s appointment is confirmed on ${sessionContext.targetDate} at ${extractedTime}. You will receive a reminder before your appointment. Is there anything else I can help you with?`;
+          }
+          
+          // Notify operations dashboard
+          if (params.onToolExecute) {
+            params.onToolExecute("book_appointment", 
+              { 
+                patientPhone: phone, 
+                patientName: patientObj?.name || overrideName || "Patient",
+                doctorId: sessionContext.doctorId, 
+                doctorName: sessionContext.doctorName,
+                date: sessionContext.targetDate, 
+                time: extractedTime 
+              }, 
+              bookResult.message
+            );
+          }
+        } else {
+          finalResponseText = bookResult.message;
+        }
+        
+        toolResults = JSON.stringify(bookResult);
+        
+        // Return early since we handled the time selection
+        const trace = {
+          detectedIntent: "booking",
+          retrievedMemory: JSON.stringify({ phone, patientName: patientObj?.name || "Guest", detectedLanguage: detectedLang }, null, 2),
+          selectedTool,
+          toolResults: toolResults || "No tool executed",
+          finalResponse: finalResponseText,
+          languageDetected: detectedLang,
+        };
+        
+        const voiceStart = Date.now();
+        const ttsLang = finalResponseText.match(/[\u0B80-\u0BFF]/) ? Language.TAMIL : finalResponseText.match(/[\u0900-\u097F]/) ? Language.HINDI : Language.ENGLISH;
+        const voiceResult = await ttsService.generateSpeech(finalResponseText, ttsLang);
+        const ttsLatency = Date.now() - voiceStart;
+        
+        const totalLatency = Date.now() - globalStart;
+        const latencyLogs = { stt: sttLatency, llm: 0, tts: ttsLatency, total: totalLatency, textLength: finalResponseText.length };
+        await redisStore.addLatencyLog(latencyLogs);
+        await redisStore.addTraceStep(trace);
+        
+        return {
+          textResponse: finalResponseText,
+          speakAudio: voiceResult.hasAudio ? { hasAudio: true, audioData: voiceResult.audioData } : undefined,
+          detectedLanguage: detectedLang,
+          trace,
+          latencies: latencyLogs,
+        };
+      } else {
+        // No valid time found - prompt again with apology for unavailable time
+        if (extractedTime && availableSlots.length > 0) {
+          // User asked for a specific time that is NOT available
+          if (detectedLang === Language.TAMIL) {
+            finalResponseText = `மன்னிக்கவும், ${extractedTime} நேரம் கிடைக்கவில்லை. கிடைக்கும் நேரங்கள்: ${availableSlots.join(', ')}. வேறு தேதியை முயல விரும்புகிறீர்கள்?`;
+          } else if (detectedLang === Language.HINDI) {
+            finalResponseText = `माफ़ कीजिए, ${extractedTime} का समय उपलब्ध नहीं है। कृपया चुनें: ${availableSlots.join(', ')}. क्या आप किसी और दिन बुक करना चाहेंगे?`;
+          } else {
+            finalResponseText = `Sorry, ${extractedTime} is not available. Please choose from: ${availableSlots.join(', ')}. Or would you like to book on a different day?`;
+          }
+        } else {
+          // Couldn't understand the time at all
+          if (detectedLang === Language.TAMIL) {
+            finalResponseText = `நேரம் புரிந்து கொள்ளப்படவில்லை. தயவுசெய்து தேர்வு செய்யவும்: ${availableSlots.join(', ')}`;
+          } else if (detectedLang === Language.HINDI) {
+            finalResponseText = `मुझे समय समझ नहीं आया। कृपया चुनें: ${availableSlots.join(', ')}`;
+          } else {
+            finalResponseText = `I didn't catch the time. Please choose from: ${availableSlots.join(', ')}`;
+          }
+        }
+        
+        // Return early - do NOT reset or show doctor list again
+        const trace = {
+          detectedIntent: "awaiting_time",
+          retrievedMemory: JSON.stringify({ phone, patientName: patientObj?.name || "Guest", detectedLanguage: detectedLang }, null, 2),
+          selectedTool: "none",
+          toolResults: "No tool executed",
+          finalResponse: finalResponseText,
+          languageDetected: detectedLang,
+        };
+        
+        const voiceStart = Date.now();
+        const ttsLang = finalResponseText.match(/[\u0B80-\u0BFF]/) ? Language.TAMIL : finalResponseText.match(/[\u0900-\u097F]/) ? Language.HINDI : Language.ENGLISH;
+        const voiceResult = await ttsService.generateSpeech(finalResponseText, ttsLang);
+        const ttsLatency = Date.now() - voiceStart;
+        
+        const totalLatency = Date.now() - globalStart;
+        const latencyLogs = { stt: sttLatency, llm: 0, tts: ttsLatency, total: totalLatency, textLength: finalResponseText.length };
+        await redisStore.addLatencyLog(latencyLogs);
+        await redisStore.addTraceStep(trace);
+        
+        return {
+          textResponse: finalResponseText,
+          speakAudio: voiceResult.hasAudio ? { hasAudio: true, audioData: voiceResult.audioData } : undefined,
+          detectedLanguage: detectedLang,
+          trace,
+          latencies: latencyLogs,
+        };
+      }
+    }
 
     const intent = extractIntent(userInput, session);
     detectedIntent = intent.intent;
@@ -576,6 +767,7 @@ export class ClinicalAgentOrchestrator {
           if (matchedDoc) {
             // Doctor selected! Fetch their slots.
             selectedTool = "check_availability";
+            toolWasCalled = true;
             const targetDate = intent.entities.date || SYSTEM_TODAY;
             const availabilityTool = await this.executeClinicalTool(
               "check_availability",
@@ -592,13 +784,24 @@ export class ClinicalAgentOrchestrator {
             };
 
             if (slotsResult.success && slotsResult.slots.length > 0) {
+              const formattedDate = formatDateLabel(targetDate);
               if (detectedLang === Language.TAMIL) {
-                finalResponseText = ` ${matchedDoc.name} அவர்களுக்கு ${targetDate} அன்று ${slotsResult.slots.join(", ")} என்று நேரங்கள் கிடைக்கின்றன. எந்த நேரத்தை விரும்புகிறீர்கள்?`;
+                finalResponseText = ` ${matchedDoc.name} அவர்களுக்கு ${formattedDate} அன்று ${slotsResult.slots.join(", ")} என்று நேரங்கள் கிடைக்கின்றன. எந்த நேரத்தை விரும்புகிறீர்கள்?`;
               } else if (detectedLang === Language.HINDI) {
-                finalResponseText = ` ${matchedDoc.name} के पास ${targetDate} को ${slotsResult.slots.join(", ")} बजे स्लॉट उपलब्ध हैं। कृपया एक समय चुनें।`;
+                finalResponseText = ` ${matchedDoc.name} के पास ${formattedDate} को ${slotsResult.slots.join(", ")} बजे स्लॉट उपलब्ध हैं। कृपया एक समय चुनें।`;
               } else {
-                finalResponseText = ` ${matchedDoc.name} has availability on ${targetDate}: ${slotsResult.slots.join(", ")}. Which time would you like?`;
+                finalResponseText = ` ${matchedDoc.name} is available on ${formattedDate} at the following times: ${slotsResult.slots.join(", ")}. Which time would you like?`;
               }
+              
+              // BUG 1 FIX: Store session context in Redis after successful check_availability
+              await redisStore.hset(`session:${phone}`, 'context', JSON.stringify({
+                state: 'AWAITING_TIME_SELECTION',
+                doctorId: matchedDoc.id,
+                doctorName: matchedDoc.name,
+                specialty: matchedDoc.specialty,
+                targetDate: targetDate,
+                availableSlots: slotsResult.slots
+              }));
             } else {
               if (detectedLang === Language.TAMIL) {
                 finalResponseText = `${matchedDoc.name} அவர்களுக்கு ${targetDate} அன்று நேரங்கள் இல்லை. வித்தியாசமான தேதியை முயற்சிக்கவும்.`;
@@ -660,6 +863,7 @@ export class ClinicalAgentOrchestrator {
           if (matchingDocs.length === 1) {
             // Single doctor matches - fetch slots directly
             selectedTool = "check_availability";
+            toolWasCalled = true;
             const targetDate = intent.entities.date || SYSTEM_TODAY;
             const availabilityTool = await this.executeClinicalTool(
               "check_availability",
@@ -675,14 +879,25 @@ export class ClinicalAgentOrchestrator {
               message: string;
             };
 
-            if (slotsResult.success && slotsResult.slots.length > 0) {
+              if (slotsResult.success && slotsResult.slots.length > 0) {
+              const formattedDate2 = formatDateLabel(targetDate);
               if (detectedLang === Language.TAMIL) {
-                finalResponseText = ` ${matchingDocs[0].name} அவர்களுக்கு ${targetDate} அன்று ${slotsResult.slots.join(", ")} என்று நேரங்கள் கிடைக்கின்றன. எந்த நேரத்தை விரும்புகிறீர்கள்?`;
+                finalResponseText = ` ${matchingDocs[0].name} அவர்களுக்கு ${formattedDate2} அன்று ${slotsResult.slots.join(", ")} என்று நேரங்கள் கிடைக்கின்றன. எந்த நேரத்தை விரும்புகிறீர்கள்?`;
               } else if (detectedLang === Language.HINDI) {
-                finalResponseText = `${matchingDocs[0].name} के पास ${targetDate} को ${slotsResult.slots.join(", ")} बजे स्लॉट उपलब्ध हैं। कृपया एक समय चुनें।`;
+                finalResponseText = `${matchingDocs[0].name} के पास ${formattedDate2} को ${slotsResult.slots.join(", ")} बजे स्लॉट उपलब्ध हैं। कृपया एक समय चुनें।`;
               } else {
-                finalResponseText = `${matchingDocs[0].name} has availability on ${targetDate}: ${slotsResult.slots.join(", ")}. Which time would you like?`;
+                finalResponseText = `${matchingDocs[0].name} is available on ${formattedDate2} at the following times: ${slotsResult.slots.join(", ")}. Which time would you like?`;
               }
+              
+              // BUG 1 FIX: Store session context in Redis after successful check_availability
+              await redisStore.hset(`session:${phone}`, 'context', JSON.stringify({
+                state: 'AWAITING_TIME_SELECTION',
+                doctorId: matchingDocs[0].id,
+                doctorName: matchingDocs[0].name,
+                specialty: matchingDocs[0].specialty,
+                targetDate: targetDate,
+                availableSlots: slotsResult.slots
+              }));
             } else {
               if (detectedLang === Language.TAMIL) {
                 finalResponseText = ` ${matchingDocs[0].name} அவர்களுக்கு ${targetDate} அன்று நேரங்கள் இல்லை. வித்தியாசமான தேதியை முயற்சிக்கவும்.`;
@@ -955,10 +1170,13 @@ Respond professionally like a real hospital AI assistant.
     llmLatency = Date.now() - llmStart;
 
     // ------------------------------------------------
-    // GREETING FOLLOW-UP (Issue 1)
+    // BUG 2 FIX: Only append fallback when no tool was called and intent is 'none'
+    // The fallback message must ONLY be used when:
+    // - intent === 'none' AND no tool was called AND no session context exists
+    // - It must NEVER be appended after a tool call response
     // ------------------------------------------------
 
-    if (session.currentStep === ConversationStep.GREETING) {
+    if (!toolWasCalled && detectedIntent === 'none' && !sessionContext && session.currentStep === ConversationStep.GREETING) {
       const followUp =
         detectedLang === Language.TAMIL
           ? " இன்று நான் உங்களுக்கு எப்படி உதவ முடியும்? உங்கள் அறிகுறிகள் அல்லது எந்த நிபுணர் தேவை என்று சொல்லுங்கள்."
@@ -1021,6 +1239,24 @@ Respond professionally like a real hospital AI assistant.
     };
 
     await redisStore.addTraceStep(trace);
+
+    // ================================================
+    // PART B: Append AI response to chat history
+    // ================================================
+    if (finalResponseText.trim()) {
+      const aiMsgEntry = { 
+        role: 'assistant', 
+        text: finalResponseText, 
+        timestamp: new Date().toISOString() 
+      };
+      try {
+        const aiHistRaw = await redisStore.hget(`session:${phone}`, 'chatHistory');
+        const aiHistory = aiHistRaw ? JSON.parse(aiHistRaw) : [];
+        aiHistory.push(aiMsgEntry);
+        const aiTrimmed = aiHistory.slice(-100);
+        await redisStore.hset(`session:${phone}`, 'chatHistory', JSON.stringify(aiTrimmed));
+      } catch (e) { /* ignore */ }
+    }
 
     // ------------------------------------------------
     // RESPONSE

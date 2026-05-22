@@ -22,9 +22,11 @@ interface ConversationSession {
 
 interface Props {
   activeConversations?: ConversationSession[];
+  onSelectConversation?: (phone: string, patientName: string) => void;
+  selectedPhone?: string;
 }
 
-export default function ActiveConversations({ activeConversations = [] }: Props) {
+export default function ActiveConversations({ activeConversations = [], onSelectConversation, selectedPhone }: Props) {
   const [currentTime, setCurrentTime] = useState(Date.now());
 
   // Update current time every second for live duration tracking
@@ -109,7 +111,12 @@ export default function ActiveConversations({ activeConversations = [] }: Props)
             return (
               <div 
                 key={session.phone + index}
-                className="bg-[#101827] border border-white/[0.06] rounded-xl p-4 hover:border-purple-500/30 transition-all"
+                onClick={() => onSelectConversation?.(session.phone, session.patientName)}
+                className={`bg-[#101827] border rounded-xl p-4 hover:border-purple-500/30 transition-all cursor-pointer ${
+                  selectedPhone === session.phone 
+                    ? "border-purple-500/50 bg-purple-500/5" 
+                    : "border-white/[0.06]"
+                }`}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">

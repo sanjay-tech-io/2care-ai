@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Campaign, Language } from "../types";
+import { Campaign, Language, Patient } from "../types";
 import { 
   Megaphone, 
   PhoneCall, 
@@ -16,12 +16,13 @@ import {
 
 interface Props {
   campaigns: Campaign[];
+  patients: Patient[];
   onTriggerCampaign: (id: string, status: "called" | "failed") => void;
   onRefreshData: () => void;
   onSimulateOutboundVoice: (phone: string, text: string) => void;
 }
 
-export default function OutboundCampaigns({ campaigns, onTriggerCampaign, onRefreshData, onSimulateOutboundVoice }: Props) {
+export default function OutboundCampaigns({ campaigns, patients, onTriggerCampaign, onRefreshData, onSimulateOutboundVoice }: Props) {
   const [activeCallItem, setActiveCallItem] = useState<Campaign | null>(null);
   const [callState, setCallState] = useState<"connecting" | "ringing" | "answered" | "no_answer" | "ended">("ended");
   const [transcriptLines, setTranscriptLines] = useState<string[]>([]);
@@ -37,6 +38,14 @@ export default function OutboundCampaigns({ campaigns, onTriggerCampaign, onRefr
       setTranscriptLines(prev => [...prev, "[RINGING] Calling " + camp.patientPhone]);
     }, 1200);
   };
+
+  // CHANGE 6: Filter campaigns to only show patients that exist in Redis
+  const filteredCampaigns = campaigns.filter(camp => {
+    // Filter to only show campaigns for patients that exist in our system
+    const patientExists = patients.some(p => p.phone === camp.patientPhone);
+    // Also filter out completed ones that have already been called
+    return patientExists && camp.status !== "called";
+  });
 
   const answerCallSimulation = () => {
     setCallState("answered");
@@ -196,7 +205,7 @@ export default function OutboundCampaigns({ campaigns, onTriggerCampaign, onRefr
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {campaigns.map(camp => (
+        {filteredCampaigns.map(camp => (
           <div 
             key={camp.id}
             className={`border rounded-xl p-4 flex flex-col justify-between ${

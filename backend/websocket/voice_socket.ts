@@ -4,6 +4,7 @@ import { latencyLogger } from "../../logs/latency_logs/latency_logger";
 import { Language } from "../../src/types";
 // At the top, import ttsService
 import { ttsService } from "../../services/text_to_speech/tts_service";
+import { redisStore } from "../../database/redis/redis_service";
 
 export class VoiceSocketBroker {
   /**
@@ -24,12 +25,22 @@ export class VoiceSocketBroker {
           preferredLang =
             (payload.language as Language) || preferredLang || Language.ENGLISH;
 
+          // CHANGE 3: Create live session in Redis
+          const sessionName = payload.name || payload.patientName || "Guest";
+          await redisStore.set(`liveSession:${phoneAssociated}`, JSON.stringify({
+            patientName: sessionName,
+            phone: phoneAssociated,
+            language: preferredLang,
+            startTime: Date.now(),
+            lastMessage: "Session started"
+          }));
+
           const welcomeText =
             preferredLang === Language.HINDI
-              ? "नमस्ते, मैं आपकी कैसे सहायता कर सकता हूँ?"
+              ? `नमस्ते ${sessionName}! मैं आरोगी हूं, आपका स्वास्थ्य सहायक। आप कौन से डॉक्टर से मिलना चाहते हैं या आपको क्या तकलीफ है?`
               : preferredLang === Language.TAMIL
-                ? "வணக்கம், நான் உங்களுக்கு எப்படி உதவ முடியும்?"
-                : "Hello! I am Aarogi, your healthcare assistant. Which specialist would you like to consult?";
+                ? `வணக்கம் ${sessionName}! நான் ஆரோகி, உங்கள் சுகாதார உதவியாளர். நீங்கள் எந்த மருத்துவரை சந்திக்க விரும்புகிறீர்கள்?`
+                : `Hello ${sessionName}! I'm Aarogi, your personal healthcare assistant. I'm here to help you book appointments, check doctor availability, and answer your health queries. Could you please tell me your symptoms or which specialist you would like to consult today?`;
 
           // ✅ Generate Gemini TTS for welcome too
           const welcomeVoice = await ttsService.generateSpeech(
@@ -67,6 +78,18 @@ export class VoiceSocketBroker {
           const clientLang =
             (payload.language as Language) || preferredLang || Language.ENGLISH;
           const overrideName = payload.name;
+
+          // CHANGE 3: Update lastMessage in live session
+          const existingSession = await redisStore.get(`liveSession:${phoneAssociatedVal}`);
+          if (existingSession) {
+            try {
+              const sessionData = JSON.parse(existingSession);
+              sessionData.lastMessage = userText;
+              await redisStore.set(`liveSession:${phoneAssociatedVal}`, JSON.stringify(sessionData));
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
 
           // Push thinking status
           ws.send(JSON.stringify({ type: "processing_audio" }));
@@ -116,10 +139,14 @@ export class VoiceSocketBroker {
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", async () => {
       console.log(
         "Patient dialer offline: clinical WebSocket channel dismantled.",
       );
+      // CHANGE 3: Delete live session from Redis
+      if (phoneAssociated) {
+        await redisStore.del(`liveSession:${phoneAssociated}`);
+      }
     });
   }
 }
