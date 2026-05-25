@@ -449,9 +449,7 @@ export default function VoiceConsole({
     renderedMessageIds.current.clear();
 
     setWsStatus("connecting");
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/api/voice`;
+    const wsUrl = "wss://twocare-ai-backend.onrender.com/api/voice";
 
     console.log("[WS] Connecting to voice broker:", wsUrl);
     const ws = new WebSocket(wsUrl);
