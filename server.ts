@@ -13,7 +13,7 @@ import { apiRouter } from "./backend/routes/api_routes";
 import { voiceSocketBroker } from "./backend/websocket/voice_socket";
 import { redisStore } from "./database/redis/redis_service";
 
-const PORT = 4000;
+const PORT = Number(process.env.PORT) || 4000;
 const app = express();
 
 app.use(express.json());
